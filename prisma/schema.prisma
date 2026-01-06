@@ -1,0 +1,198 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id       String  @id @default(cuid())
+  email    String  @unique
+  name     String
+  role     Role
+  password String
+  isActive Boolean @default(true) @map("is_active")
+
+  student  Student?
+  lecturer Lecturer?
+
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+  department   Department?  @relation(fields: [departmentId], references: [id])
+  departmentId String?
+  sessions     Session[]
+  attendances  Attendance[]
+
+  @@map("users")
+}
+
+model Department {
+  id   String @id @default(cuid())
+  name String @unique
+
+  courses Course[]
+  users   User[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("departments")
+}
+
+model Course {
+  id           String @id @default(cuid())
+  code         String @unique
+  title        String
+  departmentId String @map("department_id")
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  enrollments CourseEnrollment[]
+  lecturers   CourseLecturer[]
+  reps        CourseRep[]
+  createdAt   DateTime           @default(now()) @map("created_at")
+  updatedAt   DateTime           @updatedAt @map("updated_at")
+  sessions    Session[]
+
+  @@map("courses")
+}
+
+model CourseEnrollment {
+  id        String @id @default(cuid())
+  studentId String @map("student_id")
+  courseId  String @map("course_id")
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  course  Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  enrolledAt DateTime @default(now())
+
+  @@unique([studentId, courseId])
+  @@map("course_enrollments")
+}
+
+model CourseLecturer {
+  id         String @id @default(cuid())
+  lecturerId String @map("lecturer_id")
+  courseId   String @map("course_id")
+
+  lecturer Lecturer @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+  course   Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  assignedAt DateTime @default(now())
+
+  @@unique([lecturerId, courseId])
+  @@map("course_lecturers")
+}
+
+model CourseRep {
+  id        String @id @default(cuid())
+  studentId String @map("student_id")
+  courseId  String @map("course_id")
+
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  course  Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, courseId])
+  @@map("course_reps")
+}
+
+model Student {
+  id          String             @id @default(cuid())
+  userId      String             @unique @map("user_id")
+  matricNo    String?            @unique
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  enrollments CourseEnrollment[]
+  createdAt   DateTime           @default(now()) @map("created_at")
+  updatedAt   DateTime           @updatedAt @map("updated_at")
+  courseReps  CourseRep[]
+
+  @@map("students")
+}
+
+model Lecturer {
+  id      String  @id @default(cuid())
+  userId  String  @unique @map("user_id")
+  staffNo String? @unique
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courses   CourseLecturer[]
+  createdAt DateTime         @default(now()) @map("created_at")
+  updatedAt DateTime         @updatedAt @map("updated_at")
+
+  @@map("lecturers")
+}
+
+model Session {
+  id        String        @id @default(cuid())
+  userId    String        @map("user_id")
+  token     String        @unique
+  course    Course?       @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  courseId  String?       @map("course_id")
+  startTime DateTime      @default(now()) @map("start_time")
+  endTime   DateTime?     @map("end_time")
+  type      SessionType
+  status    SessionStatus @default(OPEN)
+  createdBy User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+  attendances Attendance[]
+
+  @@map("sessions")
+}
+
+model Attendance {
+  id        String   @id @default(cuid())
+  sessionId String   @map("session_id")
+  userId    String   @map("user_id")
+  timestamp DateTime @default(now())
+
+  confidence Float?
+  source     String? // kiosk, mobile, admin
+  status     AttendanceStatus @default(PRESENT)
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, userId])
+}
+
+model Kiosk {
+  id       String  @id @default(cuid())
+  name     String
+  location String?
+}
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  EXCUSED
+}
+
+enum Role {
+  ADMIN
+  SYSTEM_ADMIN
+  LECTURER
+  STAFF
+  STUDENT
+  REP
+}
+
+enum SessionType {
+  CHECK_IN
+  CHECK_OUT
+}
+
+enum SessionStatus {
+  OPEN
+  CLOSED
+}
