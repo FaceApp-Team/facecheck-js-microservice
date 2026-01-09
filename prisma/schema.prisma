@@ -14,22 +14,31 @@ datasource db {
 }
 
 model User {
-  id       String  @id @default(cuid())
-  email    String  @unique
-  name     String
-  role     Role
-  password String
-  isActive Boolean @default(true) @map("is_active")
-
-  student  Student?
-  lecturer Lecturer?
-
-  createdAt    DateTime     @default(now()) @map("created_at")
-  updatedAt    DateTime     @updatedAt @map("updated_at")
-  department   Department?  @relation(fields: [departmentId], references: [id])
-  departmentId String?
-  sessions     Session[]
-  attendances  Attendance[]
+  id                       String        @id @default(cuid())
+  email                    String        @unique
+  name                     String
+  loginRetries             Int?          @default(0) @map("login_retries")
+  accountStatus            AccountStatus @default(ACTIVE) @map("account_status")
+  phone                    String
+  verificationCodeAttempts Int?          @default(0) @map("verification_code_attempts")
+  accountLockedUntil       DateTime?     @map("account_locked_until")
+  emailVerificationRetries Int?          @default(0) @map("email_verification_retries")
+  phoneVerificationRetries Int?          @default(0) @map("phone_verification_retries")
+  emailVerificationCode    String?       @map("email_verification_code")
+  phoneVerificationCode    String?       @map("phone_verification_code")
+  emailCodeCreatedAt       DateTime?     @map("email_code_created_at")
+  phoneCodeCreatedAt       DateTime?     @map("phone_code_created_at")
+  role                     Role
+  password                 String
+  isActive                 Boolean       @default(false) @map("is_active")
+  student                  Student?
+  lecturer                 Lecturer?
+  createdAt                DateTime      @default(now()) @map("created_at")
+  updatedAt                DateTime      @updatedAt @map("updated_at")
+  department               Department?   @relation(fields: [departmentId], references: [id])
+  departmentId             String?
+  sessions                 Session[]
+  attendances              Attendance[]
 
   @@map("users")
 }
@@ -109,6 +118,7 @@ model Student {
   id          String             @id @default(cuid())
   userId      String             @unique @map("user_id")
   matricNo    String?            @unique
+  studentId   String
   user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   enrollments CourseEnrollment[]
   createdAt   DateTime           @default(now()) @map("created_at")
@@ -195,4 +205,10 @@ enum SessionType {
 enum SessionStatus {
   OPEN
   CLOSED
+}
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
 }

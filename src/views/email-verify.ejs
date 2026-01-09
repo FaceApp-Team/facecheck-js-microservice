@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Verify Your Email</title>
+    <style>
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu,
+          Cantarell, sans-serif;
+        background-color: #f5f5f5;
+        margin: 0;
+        padding: 0;
+        line-height: 1.6;
+        color: #333;
+      }
+      .container {
+        max-width: 600px;
+        margin: 40px auto;
+        background-color: #ffffff;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+      }
+      .header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 40px 20px;
+        text-align: center;
+      }
+      .header h1 {
+        margin: 0;
+        font-size: 28px;
+        font-weight: 600;
+      }
+      .content {
+        padding: 40px 30px;
+      }
+      .greeting {
+        font-size: 16px;
+        margin-bottom: 20px;
+        color: #333;
+      }
+      .message {
+        font-size: 15px;
+        margin-bottom: 30px;
+        color: #555;
+        line-height: 1.8;
+      }
+      .verification-button {
+        display: inline-block;
+        background-color: #667eea;
+        color: white;
+        padding: 14px 40px;
+        text-decoration: none;
+        border-radius: 6px;
+        font-weight: 600;
+        margin: 30px 0;
+        font-size: 16px;
+        transition: background-color 0.3s ease;
+      }
+      .verification-button:hover {
+        background-color: #5568d3;
+      }
+      .button-container {
+        text-align: center;
+        margin: 30px 0;
+      }
+      .fallback-link {
+        margin-top: 20px;
+        padding-top: 20px;
+        border-top: 1px solid #eee;
+        font-size: 13px;
+        color: #777;
+      }
+      .fallback-link a {
+        color: #667eea;
+        text-decoration: none;
+      }
+      .fallback-link a:hover {
+        text-decoration: underline;
+      }
+      .footer {
+        background-color: #f9f9f9;
+        padding: 20px 30px;
+        border-top: 1px solid #eee;
+        font-size: 12px;
+        color: #999;
+        text-align: center;
+      }
+      .footer p {
+        margin: 8px 0;
+      }
+      .warning {
+        background-color: #fff3cd;
+        border-left: 4px solid #ffc107;
+        padding: 15px;
+        margin: 20px 0;
+        border-radius: 4px;
+        font-size: 14px;
+        color: #856404;
+      }
+      .footer-links {
+        margin-top: 10px;
+      }
+      .footer-links a {
+        color: #667eea;
+        text-decoration: none;
+        margin: 0 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <!-- Header -->
+      <div class="header">
+        <h1>Verify Your Email Address</h1>
+      </div>
+
+      <!-- Content -->
+      <div class="content">
+        <div class="greeting">Hello <strong><%= userName %></strong>,</div>
+
+        <div class="message">
+          <p>
+            Thank you for creating an account with us! To complete your
+            registration and gain full access to your account, please verify
+            your email address by clicking the button below.
+          </p>
+
+          <p>
+            This verification link will expire in <strong>24 hours</strong> for
+            security reasons.
+          </p>
+        </div>
+
+        <!-- Verification Button -->
+        <div class="button-container">
+          <a href="<%= verificationLink %>" class="verification-button"
+            >Verify Email Address</a
+          >
+        </div>
+
+        <!-- Fallback Link -->
+        <div class="fallback-link">
+          <p>
+            If the button above doesn't work, you can copy and paste this link
+            into your browser:
+          </p>
+          <p
+            style="
+              word-break: break-all;
+              background-color: #f5f5f5;
+              padding: 10px;
+              border-radius: 4px;
+            "
+          >
+            <%= verificationLink %>
+          </p>
+        </div>
+
+        <!-- Security Warning -->
+        <div class="warning">
+          <strong>🔒 Security Notice:</strong> If you didn't create this
+          account, please ignore this email. Your email address will not be
+          verified and your account will not be activated.
+        </div>
+
+        <!-- Additional Info -->
+        <div
+          class="message"
+          style="margin-top: 30px; font-size: 14px; color: #777"
+        >
+          <p>
+            If you have any questions or need assistance, please don't hesitate
+            to contact our support team.
+          </p>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="footer">
+        <p>&copy; <%= new Date().getFullYear() %> All Rights Reserved</p>
+        <p style="margin-top: 15px; font-size: 11px">
+          This is an automated email. Please do not reply directly to this
+          message.
+        </p>
+        <div class="footer-links">
+          <a href="<%= baseUrl %>">Visit Website</a>
+          <a href="<%= baseUrl %>/support">Support</a>
+          <a href="<%= baseUrl %>/privacy">Privacy Policy</a>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
