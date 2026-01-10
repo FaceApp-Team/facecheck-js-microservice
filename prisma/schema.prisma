@@ -17,6 +17,11 @@ model User {
   id                       String        @id @default(cuid())
   email                    String        @unique
   name                     String
+  passwordResetCode        String?       @map("password_reset_code")
+  resetCodeCreatedAt       DateTime?     @map("reset_code_created_at")
+  lastLoginAt              DateTime?     @map("last_login_at")
+  lastLoginIp              String?       @map("last_login_ip")
+  ipAddress                String?       @map("ip_address")
   loginRetries             Int?          @default(0) @map("login_retries")
   accountStatus            AccountStatus @default(ACTIVE) @map("account_status")
   phone                    String
@@ -174,12 +179,15 @@ model Attendance {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, userId])
+  @@map("attendances")
 }
 
 model Kiosk {
   id       String  @id @default(cuid())
   name     String
   location String?
+
+  @@map("kiosks")
 }
 
 enum AttendanceStatus {

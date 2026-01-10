@@ -13,32 +13,52 @@ import { JwtService } from '@nestjs/jwt';
 import { MailerModule } from '@nestjs-modules/mailer';
 import { EjsAdapter } from '@nestjs-modules/mailer/dist/adapters/ejs.adapter';
 import { BullModule } from '@nestjs/bullmq';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
+import { join } from 'path';
+import { HttpModule } from '@nestjs/axios';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, load: [appConfig] }),
+    ThrottlerModule.forRoot({
+      throttlers: [
+        {
+          ttl: 60000,
+          limit: 5,
+        },
+      ],
+    }),
     BullModule.forRootAsync({
       useFactory: (config: ConfigService) => ({
         connection: {
           host: config.get<string>('REDIS_HOST'),
           port: config.get<number>('REDIS_PORT'),
-          password: config.get<string>('REDIS_PASSWORD'),
+          auth: {
+            user: process.env.BREVO_USER,
+            pass: process.env.BREVO_PASS,
+          },
         },
       }),
       inject: [ConfigService],
     }),
+    HttpModule,
     MailerModule.forRootAsync({
-      useFactory: () => ({
-        transport: 'smtps://user@domain.com:pass@smtp.domain.com',
+      useFactory: (config: ConfigService) => ({
+        transport: {
+          host: config.get<string>('mailer.brevoServer'),
+          port: config.get<number>('mailer.brevoPort'),
+          auth: {
+            pass: config.get<string>('mailer.brevoSmtpKey'),
+            user: config.get<string>('mailer.brevoUser'),
+          },
+        },
         defaults: {
-          from: '"nest-modules" <modules@nestjs.com>',
+          from: '"College of Medicine and Allied Sciences" <info@comas.edu.gh>',
         },
         template: {
-          dir: __dirname + '..' + '/views',
+          dir: join(__dirname, '..', 'views'),
           adapter: new EjsAdapter(),
-          options: {
-            strict: true,
-          },
         },
       }),
       inject: [ConfigService],
@@ -49,6 +69,10 @@ import { BullModule } from '@nestjs/bullmq';
   ],
   controllers: [AuthController, AppController],
   providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerModule,
+    },
     AuthService,
     AppService,
     PrismaService,
