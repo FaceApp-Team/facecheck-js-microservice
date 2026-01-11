@@ -158,4 +158,31 @@ export class HelpersService {
 
     return response;
   }
+
+  async createUserLog(email: string, action: string, ipAddress?: string) {
+    await this.getUser(email);
+
+    await this.prisma.user.update({
+      where: {
+        email,
+      },
+      data: {
+        logs: {
+          create: {
+            action,
+            ipAddress,
+          },
+        },
+      },
+    });
+  }
+
+  async createSystemLog(action: string, ipAddress?: string) {
+    await this.prisma.systemLogs.create({
+      data: {
+        action,
+        ipAddress,
+      },
+    });
+  }
 }

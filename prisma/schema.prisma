@@ -44,6 +44,7 @@ model User {
   departmentId             String?
   sessions                 Session[]
   attendances              Attendance[]
+  logs                     Logs[]
 
   @@map("users")
 }
@@ -188,6 +189,27 @@ model Kiosk {
   location String?
 
   @@map("kiosks")
+}
+
+model Logs {
+  id        String   @id @default(cuid())
+  userId    String?  @map("user_id")
+  action    String
+  ipAddress String?  @map("ip_address")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("logs")
+}
+
+model SystemLogs {
+  id        String   @id @default(cuid())
+  action    String
+  ipAddress String?  @map("ip_address")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("system_logs")
 }
 
 enum AttendanceStatus {

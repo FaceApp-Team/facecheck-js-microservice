@@ -1,3 +1,5 @@
+import { UsersModule } from './users/users.module';
+import { UsersController } from './users/users.controller';
 import { HelpersModule } from './helpers/helpers.module';
 import { AuthModule } from './auth/auth.module';
 import { AuthService } from './auth/auth.service';
@@ -20,6 +22,7 @@ import { HttpModule } from '@nestjs/axios';
 
 @Module({
   imports: [
+    UsersModule,
     ConfigModule.forRoot({ isGlobal: true, load: [appConfig] }),
     ThrottlerModule.forRoot({
       throttlers: [
@@ -67,7 +70,7 @@ import { HttpModule } from '@nestjs/axios';
     HelpersModule,
     AuthModule,
   ],
-  controllers: [AuthController, AppController],
+  controllers: [UsersController, AuthController, AppController],
   providers: [
     {
       provide: APP_GUARD,

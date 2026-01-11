@@ -37,8 +37,8 @@ export class AuthController {
     return response;
   }
 
-  @Post('reset-password')
   @UseGuards(JwtAuthGuard)
+  @Post('reset-password')
   async resetPassword(
     @Req() req: Request,
     @Body()
