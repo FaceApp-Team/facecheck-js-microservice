@@ -23,6 +23,8 @@ import { join } from 'path';
 import { HttpModule } from '@nestjs/axios';
 import { MulterModule } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
+import { UsersService } from './users/users.service';
+import { ImageProducer } from './producers/image.producer';
 
 @Module({
   imports: [
@@ -75,7 +77,7 @@ import { memoryStorage } from 'multer';
       inject: [ConfigService],
     }),
 
-    // BullModule.registerQueue({ name: 'image' }),
+    BullModule.registerQueue({ name: 'image' }),
     HelpersModule,
     AuthModule,
   ],
@@ -90,6 +92,8 @@ import { memoryStorage } from 'multer';
     PrismaService,
     HelpersService,
     JwtService,
+    UsersService,
+    ImageProducer,
   ],
 })
 export class AppModule {}

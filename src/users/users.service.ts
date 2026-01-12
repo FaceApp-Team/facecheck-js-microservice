@@ -273,26 +273,24 @@ export class UsersService {
     return { jobId, status: state };
   }
 
-  async updateUserDetails(
-    userDto?: Partial<UsersDto>,
-    authDto?: Partial<AuthDto>,
-  ) {
+  async updateUserDetails(email: string, authDto?: Partial<AuthDto>) {
     //update user details
-    const user = await this.helpers.getUser(authDto!.email!);
+    const user = await this.helpers.getUser(email);
+
+    let password;
+
+    if (authDto?.password) {
+      const hashedPassword = bcrypt.hash(authDto?.password || '', 10);
+      password = hashedPassword;
+    }
 
     const updatedUser = await this.prisma.user.update({
       where: { id: user.id },
       data: {
-        name: userDto?.fullName ?? user.name,
-        phone: userDto?.phone ?? user.phone,
-        role: (userDto?.role ?? user.role) || Role.STUDENT,
-        email: userDto?.email ?? user.email,
-        student: {
-          update: {
-            studentId: userDto?.studentId,
-            matricNo: userDto?.studentId,
-          },
-        },
+        name: authDto?.name ?? user.name,
+        phone: authDto?.phone ?? user.phone,
+        email: authDto?.email ?? user.email,
+        password: password ?? user.password,
       },
     });
 
@@ -301,4 +299,6 @@ export class UsersService {
       user: updatedUser,
     };
   }
+
+  async updateStuStaffLectDetails() {}
 }
