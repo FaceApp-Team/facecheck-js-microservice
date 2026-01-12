@@ -14,10 +14,12 @@ import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { AxiosResponse } from 'axios';
+import { supabase } from '../supabase/supabase-client';
 
 @Injectable()
 export class HelpersService {
   logger = new Logger(HelpersService.name);
+  buckcetName = 'face-check-media';
   constructor(
     private readonly prisma: PrismaService,
     private readonly mailer: MailerService,
@@ -152,7 +154,7 @@ export class HelpersService {
     if (response.status !== 200) {
       this.logger.error(`SMS sending failed: ${JSON.stringify(response.data)}`);
       throw new InternalServerErrorException(
-        response.data.message || 'Failed to send SMS',
+        response.data.message || 'Failed to send SMS. Try again later.',
       );
     }
 
@@ -185,4 +187,61 @@ export class HelpersService {
       },
     });
   }
+
+  async uploadImage(
+    buffer: Buffer<ArrayBufferLike>,
+    originalname: string,
+    mimetype: string,
+  ): Promise<{ imageUrl: string }> {
+    //check if buffer is empty
+    if (!buffer || buffer.length === 0) {
+      throw new BadRequestException('Invalid file upload');
+    }
+
+    const ext = originalname.split('.').pop();
+
+    const allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'];
+
+    if (!ext || !allowedExtensions.includes(ext.toLowerCase())) {
+      throw new BadRequestException('Unsupported file type');
+    }
+
+    //file name
+    const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}.${ext}`;
+
+    const imagePath = `images/${filename}`;
+
+    //upload to supabase storage
+    const { data, error } = await supabase.storage
+      .from(this.buckcetName)
+      .upload(imagePath, buffer, {
+        cacheControl: '3600',
+        upsert: false,
+        contentType: mimetype,
+      });
+
+    if (error) {
+      this.logger.error(`Image upload failed: ${error.message}`);
+      throw new InternalServerErrorException(
+        'Image upload failed. Please try again later.',
+      );
+    }
+
+    //get public url
+    const { data: publicData } = supabase.storage
+      .from(this.buckcetName)
+      .getPublicUrl(data.path);
+
+    //check if public url is available
+    if (!publicData || !publicData.publicUrl) {
+      this.logger.error(`Failed to retrieve public URL for uploaded image.`);
+      throw new InternalServerErrorException(
+        'Failed to retrieve image URL. Please try again later.',
+      );
+    }
+
+    return { imageUrl: publicData.publicUrl };
+  }
+
+  async getFaceEmbedding() {}
 }
