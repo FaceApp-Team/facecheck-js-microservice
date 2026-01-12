@@ -1,3 +1,5 @@
+import { ProducersModule } from './producers/producers.module';
+import { ConsumersModule } from './consumers/consumers.module';
 import { UsersModule } from './users/users.module';
 import { UsersController } from './users/users.controller';
 import { HelpersModule } from './helpers/helpers.module';
@@ -15,13 +17,19 @@ import { JwtService } from '@nestjs/jwt';
 import { MailerModule } from '@nestjs-modules/mailer';
 import { EjsAdapter } from '@nestjs-modules/mailer/dist/adapters/ejs.adapter';
 import { BullModule } from '@nestjs/bullmq';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { join } from 'path';
 import { HttpModule } from '@nestjs/axios';
+import { MulterModule } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { UsersService } from './users/users.service';
+import { ImageProducer } from './producers/image.producer';
 
 @Module({
   imports: [
+    ProducersModule,
+    ConsumersModule,
     UsersModule,
     ConfigModule.forRoot({ isGlobal: true, load: [appConfig] }),
     ThrottlerModule.forRoot({
@@ -32,20 +40,10 @@ import { HttpModule } from '@nestjs/axios';
         },
       ],
     }),
-    BullModule.forRootAsync({
-      useFactory: (config: ConfigService) => ({
-        connection: {
-          host: config.get<string>('REDIS_HOST'),
-          port: config.get<number>('REDIS_PORT'),
-          auth: {
-            user: process.env.BREVO_USER,
-            pass: process.env.BREVO_PASS,
-          },
-        },
-      }),
-      inject: [ConfigService],
-    }),
     HttpModule,
+    MulterModule.register({
+      storage: memoryStorage(),
+    }),
     MailerModule.forRootAsync({
       useFactory: (config: ConfigService) => ({
         transport: {
@@ -67,6 +65,19 @@ import { HttpModule } from '@nestjs/axios';
       inject: [ConfigService],
     }),
 
+    BullModule.forRootAsync({
+      useFactory: (config: ConfigService) => ({
+        connection: {
+          host: config.get<string>('redis.host'),
+          port: config.get<number>('redis.port'),
+          username: 'default',
+          password: config.get<string>('redis.password'),
+        },
+      }),
+      inject: [ConfigService],
+    }),
+
+    BullModule.registerQueue({ name: 'image' }),
     HelpersModule,
     AuthModule,
   ],
@@ -74,13 +85,15 @@ import { HttpModule } from '@nestjs/axios';
   providers: [
     {
       provide: APP_GUARD,
-      useClass: ThrottlerModule,
+      useClass: ThrottlerGuard,
     },
     AuthService,
     AppService,
     PrismaService,
     HelpersService,
     JwtService,
+    UsersService,
+    ImageProducer,
   ],
 })
 export class AppModule {}

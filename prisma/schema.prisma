@@ -14,13 +14,14 @@ datasource db {
 }
 
 model User {
-  id                       String        @id @default(cuid())
-  email                    String        @unique
-  name                     String
-  passwordResetCode        String?       @map("password_reset_code")
-  resetCodeCreatedAt       DateTime?     @map("reset_code_created_at")
-  lastLoginAt              DateTime?     @map("last_login_at")
-  lastLoginIp              String?       @map("last_login_ip")
+  id                 String    @id @default(cuid())
+  email              String    @unique
+  name               String
+  passwordResetCode  String?   @map("password_reset_code")
+  resetCodeCreatedAt DateTime? @map("reset_code_created_at")
+  lastLoginAt        DateTime? @map("last_login_at")
+  lastLoginIp        String?   @map("last_login_ip")
+  embeddingStatus          ImageStatus   @default(PENDING) @map("embedding_status")
   ipAddress                String?       @map("ip_address")
   loginRetries             Int?          @default(0) @map("login_retries")
   accountStatus            AccountStatus @default(ACTIVE) @map("account_status")
@@ -40,36 +41,21 @@ model User {
   lecturer                 Lecturer?
   createdAt                DateTime      @default(now()) @map("created_at")
   updatedAt                DateTime      @updatedAt @map("updated_at")
-  department               Department?   @relation(fields: [departmentId], references: [id])
-  departmentId             String?
+  imageUrl                 String?       @map("image_url")
+  imageStatus              ImageStatus?  @default(PENDING) @map("image_status")
+  faceEmbedding            String?       @map("face_embedding")
   sessions                 Session[]
   attendances              Attendance[]
   logs                     Logs[]
+  staffs                   Staff[]
 
   @@map("users")
 }
 
-model Department {
-  id   String @id @default(cuid())
-  name String @unique
-
-  courses Course[]
-  users   User[]
-
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  @@map("departments")
-}
-
 model Course {
-  id           String @id @default(cuid())
-  code         String @unique
-  title        String
-  departmentId String @map("department_id")
-
-  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
-
+  id          String             @id @default(cuid())
+  code        String             @unique
+  title       String
   enrollments CourseEnrollment[]
   lecturers   CourseLecturer[]
   reps        CourseRep[]
@@ -92,6 +78,18 @@ model CourseEnrollment {
 
   @@unique([studentId, courseId])
   @@map("course_enrollments")
+}
+
+model Staff {
+  id      String @id @default(cuid())
+  userId  String @map("user_id")
+  staffNo String @unique @map("staff_no")
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("staffs")
 }
 
 model CourseLecturer {
@@ -241,4 +239,11 @@ enum AccountStatus {
   ACTIVE
   INACTIVE
   SUSPENDED
+}
+
+enum ImageStatus {
+  PENDING
+  UPLOADED
+  FAILED
+  PROCESSING
 }
