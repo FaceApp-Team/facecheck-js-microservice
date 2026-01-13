@@ -1,3 +1,11 @@
+import { NotifcationsModule } from './notifications/notifcations.module';
+import { NotificationsService } from './notifications/notifications.service';
+import { NotificationsController } from './notifications/notifications.controller';
+import { SessionsModule } from './sessions/sessions.module';
+import { SessionsController } from './sessions/sessions.controller';
+import { CoursesModule } from './courses/courses.module';
+import { CoursesService } from './courses/courses.service';
+import { CoursesController } from './courses/courses.controller';
 import { ProducersModule } from './producers/producers.module';
 import { ConsumersModule } from './consumers/consumers.module';
 import { UsersModule } from './users/users.module';
@@ -25,9 +33,13 @@ import { MulterModule } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { UsersService } from './users/users.service';
 import { ImageProducer } from './producers/image.producer';
+import { SessionsService } from './sessions/sessions.service';
 
 @Module({
   imports: [
+    NotifcationsModule,
+    SessionsModule,
+    CoursesModule,
     ProducersModule,
     ConsumersModule,
     UsersModule,
@@ -81,8 +93,17 @@ import { ImageProducer } from './producers/image.producer';
     HelpersModule,
     AuthModule,
   ],
-  controllers: [UsersController, AuthController, AppController],
+  controllers: [
+    NotificationsController,
+    SessionsController,
+    CoursesController,
+    UsersController,
+    AuthController,
+    AppController,
+  ],
   providers: [
+    NotificationsService,
+    CoursesService,
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
@@ -93,6 +114,7 @@ import { ImageProducer } from './producers/image.producer';
     HelpersService,
     JwtService,
     UsersService,
+    SessionsService,
     ImageProducer,
   ],
 })
