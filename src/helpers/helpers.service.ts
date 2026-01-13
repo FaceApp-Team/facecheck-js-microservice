@@ -15,6 +15,7 @@ import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { AxiosResponse } from 'axios';
 import { supabase } from '../supabase/supabase-client';
+import ShortUniqueId from 'short-unique-id';
 
 @Injectable()
 export class HelpersService {
@@ -244,4 +245,9 @@ export class HelpersService {
   }
 
   async getFaceEmbedding() {}
+
+  generateRandomCode(length: number) {
+    const id = new ShortUniqueId({ dictionary: 'hex', length });
+    return id.rnd();
+  }
 }

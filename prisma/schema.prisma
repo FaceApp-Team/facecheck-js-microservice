@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client"
   output   = "../generated/prisma"
@@ -14,13 +8,13 @@ datasource db {
 }
 
 model User {
-  id                 String    @id @default(cuid())
-  email              String    @unique
-  name               String
-  passwordResetCode  String?   @map("password_reset_code")
-  resetCodeCreatedAt DateTime? @map("reset_code_created_at")
-  lastLoginAt        DateTime? @map("last_login_at")
-  lastLoginIp        String?   @map("last_login_ip")
+  id                       String        @id @default(cuid())
+  email                    String        @unique
+  name                     String
+  passwordResetCode        String?       @map("password_reset_code")
+  resetCodeCreatedAt       DateTime?     @map("reset_code_created_at")
+  lastLoginAt              DateTime?     @map("last_login_at")
+  lastLoginIp              String?       @map("last_login_ip")
   embeddingStatus          ImageStatus   @default(PENDING) @map("embedding_status")
   ipAddress                String?       @map("ip_address")
   loginRetries             Int?          @default(0) @map("login_retries")
@@ -47,7 +41,8 @@ model User {
   sessions                 Session[]
   attendances              Attendance[]
   logs                     Logs[]
-  staffs                   Staff[]
+  staff                    Staff?
+  admin                    Admin?
 
   @@map("users")
 }
@@ -82,7 +77,7 @@ model CourseEnrollment {
 
 model Staff {
   id      String @id @default(cuid())
-  userId  String @map("user_id")
+  userId  String @unique @map("user_id")
   staffNo String @unique @map("staff_no")
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -122,7 +117,7 @@ model Student {
   id          String             @id @default(cuid())
   userId      String             @unique @map("user_id")
   matricNo    String?            @unique
-  studentId   String
+  studentId   String             @unique @map("student_id")
   user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   enrollments CourseEnrollment[]
   createdAt   DateTime           @default(now()) @map("created_at")
@@ -133,43 +128,49 @@ model Student {
 }
 
 model Lecturer {
-  id      String  @id @default(cuid())
-  userId  String  @unique @map("user_id")
-  staffNo String? @unique
-
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  courses   CourseLecturer[]
-  createdAt DateTime         @default(now()) @map("created_at")
-  updatedAt DateTime         @updatedAt @map("updated_at")
+  id         String           @id @default(cuid())
+  userId     String           @unique @map("user_id")
+  staffNo    String?          @unique
+  hourlyRate Float            @default(0.0) @map("hourly_rate")
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courses    CourseLecturer[]
+  createdAt  DateTime         @default(now()) @map("created_at")
+  updatedAt  DateTime         @updatedAt @map("updated_at")
+  sessions   Session[]
 
   @@map("lecturers")
 }
 
 model Session {
-  id        String        @id @default(cuid())
-  userId    String        @map("user_id")
-  token     String        @unique
-  course    Course?       @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  courseId  String?       @map("course_id")
-  startTime DateTime      @default(now()) @map("start_time")
-  endTime   DateTime?     @map("end_time")
-  type      SessionType
-  status    SessionStatus @default(OPEN)
-  createdBy User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  createdAt   DateTime     @default(now()) @map("created_at")
-  updatedAt   DateTime     @updatedAt @map("updated_at")
-  attendances Attendance[]
+  id              String        @id @default(cuid())
+  userId          String        @map("user_id")
+  location        String?
+  name            String
+  token           String        @unique
+  lecturerId      String?       @map("lecturer_id")
+  lecturer        Lecturer?     @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+  course          Course?       @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  courseId        String?       @map("course_id")
+  startTime       DateTime      @default(now()) @map("start_time")
+  endTime         DateTime?     @map("end_time")
+  mode            SessionMode   @default(CHECK_IN)
+  type            SessionType   @default(CLASS)
+  lateThreshold   Int           @default(30) @map("late_threshold") // in minutes
+  absentThreshold Int           @default(60) @map("absent_threshold") // in minutes
+  status          SessionStatus @default(OPEN)
+  createdBy       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+  attendances     Attendance[]
 
   @@map("sessions")
 }
 
 model Attendance {
-  id        String   @id @default(cuid())
-  sessionId String   @map("session_id")
-  userId    String   @map("user_id")
-  timestamp DateTime @default(now())
-
+  id         String           @id @default(cuid())
+  sessionId  String           @map("session_id")
+  userId     String           @map("user_id")
+  timestamp  DateTime         @default(now())
   confidence Float?
   source     String? // kiosk, mobile, admin
   status     AttendanceStatus @default(PRESENT)
@@ -190,11 +191,13 @@ model Kiosk {
 }
 
 model Logs {
-  id        String   @id @default(cuid())
-  userId    String?  @map("user_id")
+  id        String             @id @default(cuid())
+  userId    String?            @map("user_id")
   action    String
-  ipAddress String?  @map("ip_address")
-  createdAt DateTime @default(now()) @map("created_at")
+  priority  Priority           @default(HIGH)
+  status    NotificationStatus @default(UNREAD)
+  ipAddress String?            @map("ip_address")
+  createdAt DateTime           @default(now()) @map("created_at")
 
   user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -202,12 +205,35 @@ model Logs {
 }
 
 model SystemLogs {
-  id        String   @id @default(cuid())
+  id        String             @id @default(cuid())
   action    String
-  ipAddress String?  @map("ip_address")
-  createdAt DateTime @default(now()) @map("created_at")
+  status    NotificationStatus @default(UNREAD)
+  ipAddress String?            @map("ip_address")
+  createdAt DateTime           @default(now()) @map("created_at")
 
   @@map("system_logs")
+}
+
+model Admin {
+  id        String   @id @default(cuid())
+  userId    String   @unique @map("user_id")
+  adminNo   String   @unique @map("admin_no")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("admins")
+}
+
+enum NotificationStatus {
+  READ
+  UNREAD
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
 }
 
 enum AttendanceStatus {
@@ -225,7 +251,7 @@ enum Role {
   REP
 }
 
-enum SessionType {
+enum SessionMode {
   CHECK_IN
   CHECK_OUT
 }
@@ -246,4 +272,14 @@ enum ImageStatus {
   UPLOADED
   FAILED
   PROCESSING
+  COMPLETED
+}
+
+enum SessionType {
+  CLASS
+  EXAM
+  LAB
+  TUTORIAL
+  EVENT
+  WORKSHIFT
 }

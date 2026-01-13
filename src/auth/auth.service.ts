@@ -42,7 +42,11 @@ export class AuthService {
       where: { email: payload.email },
     });
 
-    if (existingUser) throw new ConflictException('User already exists');
+    if (existingUser)
+      return {
+        message: 'User with this email already exists',
+        user: existingUser,
+      };
 
     // validate email
     if (process.env.NODE_ENV === 'production') {

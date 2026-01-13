@@ -2,6 +2,7 @@ import {
   IsArray,
   IsEnum,
   IsNotEmpty,
+  IsNumber,
   IsOptional,
   IsString,
 } from 'class-validator';
@@ -16,6 +17,10 @@ export class UsersDto {
   @IsNotEmpty()
   fullName: string;
 
+  @IsNumber()
+  @IsOptional()
+  lecturerHourlyRate: number;
+
   @IsString()
   @IsNotEmpty()
   email: string;
@@ -25,7 +30,7 @@ export class UsersDto {
   phone: string;
 
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   password: string;
 
   @IsString()
