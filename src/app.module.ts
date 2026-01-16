@@ -1,3 +1,7 @@
+import { PayrollModule } from './payroll/payroll.module';
+import { PayrollController } from './payroll/payroll.controller';
+import { AttendanceModule } from './attendance/attendance.module';
+import { AttendanceController } from './attendance/attendance.controller';
 import { NotifcationsModule } from './notifications/notifcations.module';
 import { NotificationsService } from './notifications/notifications.service';
 import { NotificationsController } from './notifications/notifications.controller';
@@ -34,9 +38,13 @@ import { memoryStorage } from 'multer';
 import { UsersService } from './users/users.service';
 import { ImageProducer } from './producers/image.producer';
 import { SessionsService } from './sessions/sessions.service';
+import { AttendanceService } from './attendance/attendance.service';
+import { PayrollService } from './payroll/payroll.service';
 
 @Module({
   imports: [
+    PayrollModule,
+    AttendanceModule,
     NotifcationsModule,
     SessionsModule,
     CoursesModule,
@@ -94,6 +102,8 @@ import { SessionsService } from './sessions/sessions.service';
     AuthModule,
   ],
   controllers: [
+    PayrollController,
+    AttendanceController,
     NotificationsController,
     SessionsController,
     CoursesController,
@@ -116,6 +126,8 @@ import { SessionsService } from './sessions/sessions.service';
     UsersService,
     SessionsService,
     ImageProducer,
+    AttendanceService,
+    PayrollService,
   ],
 })
 export class AppModule {}

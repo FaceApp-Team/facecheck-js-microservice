@@ -3,6 +3,7 @@ export default () => ({
     port: parseInt(process.env.APP_PORT || '3000', 10) || 3000,
     jwtSecret: process.env.JWT_SECRET || '',
     env: process.env.NODE_ENV || 'development',
+    secretCode: process.env.FACE_CHECK_SECRET_CODE || '',
   },
   database: {
     url: process.env.DATABASE_URL || '',

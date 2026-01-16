@@ -14,7 +14,8 @@ export class CoursesService {
     private readonly helpers: HelpersService,
   ) {}
 
-  async addCourse(payload: CoursesDto) {
+  async addCourse(payload: CoursesDto, email: string) {
+    const user = await this.helpers.getUser(email);
     const course = await this.prisma.course.findUnique({
       where: { code: payload.courseCode },
     });
@@ -57,10 +58,20 @@ export class CoursesService {
 
       return { newCourse, lecturer };
     });
+
+    await this.helpers.createSystemLog(
+      `New course added: ${transaction.newCourse.title} by ${user.name} on ${new Date().toISOString()}`,
+    );
+
     return { success: true, data: transaction.newCourse };
   }
 
-  async updateCourse(courseId: string, payload: Partial<CoursesDto>) {
+  async updateCourse(
+    courseId: string,
+    payload: Partial<CoursesDto>,
+    email: string,
+  ) {
+    const user = await this.helpers.getUser(email);
     const course = await this.prisma.course.findUnique({
       where: { id: courseId },
       include: { lecturers: true },
@@ -105,10 +116,15 @@ export class CoursesService {
       return { updatedCourse };
     });
 
+    await this.helpers.createSystemLog(
+      `Course updated: ${transaction.updatedCourse.title} by ${user.name} on ${new Date().toISOString()}`,
+    );
+
     return { success: true, data: transaction.updatedCourse };
   }
 
-  async getAllCourses() {
+  async getAllCourses(email: string) {
+    const user = await this.helpers.getUser(email);
     const courses = await this.prisma.course.findMany({
       include: {
         lecturers: true,
@@ -118,10 +134,15 @@ export class CoursesService {
       },
       orderBy: { createdAt: 'desc' },
     });
+
+    await this.helpers.createSystemLog(
+      `Fetched all courses on ${new Date().toISOString()} by ${user.name}`,
+    );
     return { success: true, data: courses };
   }
 
-  async removeCourse(courseId: string) {
+  async removeCourse(courseId: string, email: string) {
+    const user = await this.helpers.getUser(email);
     const course = await this.prisma.course.findUnique({
       where: { id: courseId },
     });
@@ -134,15 +155,31 @@ export class CoursesService {
       where: { id: courseId },
     });
 
+    await this.helpers.createSystemLog(
+      `Course removed: ${course.title} by ${user.name} on ${new Date().toISOString()}`,
+    );
     return { success: true, message: 'Course removed successfully' };
   }
 
-  async removeStudentCourse(email: string, courseId: string) {
+  async removeStudentCourse(
+    email: string,
+    courseId: string,
+    studentId: string,
+  ) {
     const user = await this.helpers.getUser(email);
 
     const student = await this.prisma.student.findUnique({
-      where: { userId: user.id },
+      where: { id: studentId },
+      include: { user: { select: { name: true, email: true } } },
     });
+
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+    });
+
+    if (!course) {
+      throw new NotFoundException('Course not found');
+    }
 
     if (!student) {
       throw new NotFoundException('Student not found');
@@ -172,6 +209,13 @@ export class CoursesService {
       },
     });
 
+    await this.helpers.createSystemLog(
+      `Student ${student.user.name} removed from course ${courseId} by ${user.name} on ${new Date().toISOString()}`,
+    );
+    await this.helpers.createUserLog(
+      student.user.email,
+      `You have been removed from course ${course.title} on ${new Date().toISOString()}`,
+    );
     return {
       message: 'Course removed from student successfully',
     };

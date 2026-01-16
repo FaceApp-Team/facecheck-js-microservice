@@ -4,6 +4,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { configDotenv } from 'dotenv';
 import { ValidationPipe } from '@nestjs/common';
 import { join } from 'path';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 
 configDotenv();
 async function bootstrap() {
@@ -17,6 +18,17 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
+  const config = new DocumentBuilder()
+    .setTitle('FaceCheck Microservice API')
+    .setDescription(
+      'This is the API documentation for the FaceCheck nestjs microservice.',
+    )
+    .setVersion('0.1')
+    .addTag('facecheck')
+    .build();
+  const documentFactory = () => SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup('docs', app, documentFactory);
+
   app.useStaticAssets(join(__dirname, 'public'));
   app.setBaseViewsDir(join(__dirname, '..', 'views'));
   app.setViewEngine('ejs');
@@ -25,6 +37,7 @@ async function bootstrap() {
       transform: true,
     }),
   );
+
   app.set('trust proxy', true);
   await app.listen(process.env.PORT ?? 3000);
 }

@@ -5,11 +5,13 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { CoursesService } from './courses.service';
 import { CoursesDto } from '../dto/courses.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Request } from 'express';
 
 @Controller('courses')
 export class CoursesController {
@@ -17,8 +19,9 @@ export class CoursesController {
 
   @UseGuards(JwtAuthGuard)
   @Post('/add')
-  async addCourse(@Body() payload: CoursesDto) {
-    const response = await this.courses.addCourse(payload);
+  async addCourse(@Body() payload: CoursesDto, @Req() req: Request) {
+    const email = (req.user as any)?.email;
+    const response = await this.courses.addCourse(payload, email);
     return response;
   }
 
@@ -27,20 +30,40 @@ export class CoursesController {
   async updateCourse(
     @Body() payload: Partial<CoursesDto>,
     @Query('courseId') courseId: string,
+    @Req() req: Request,
   ) {
-    const response = await this.courses.updateCourse(courseId, payload);
+    const email = (req.user as any)?.email;
+    const response = await this.courses.updateCourse(courseId, payload, email);
     return response;
   }
 
   @UseGuards(JwtAuthGuard)
   @Get('/all')
-  async getCourses() {
-    const response = await this.courses.getAllCourses();
+  async getCourses(@Req() req: Request) {
+    const email = (req.user as any)?.email;
+    const response = await this.courses.getAllCourses(email);
     return response;
   }
 
-  async removeCourse(@Query('courseId') courseId: string) {
-    const response = await this.courses.removeCourse(courseId);
+  async removeCourse(@Query('courseId') courseId: string, @Req() req: Request) {
+    const email = (req.user as any)?.email;
+    const response = await this.courses.removeCourse(courseId, email);
+    return response;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('/remove-student-course')
+  async removeStudentCourse(
+    @Query('courseId') courseId: string,
+    @Query('studentId') studentId: string,
+    @Req() req: Request,
+  ) {
+    const email = (req.user as any)?.email;
+    const response = await this.courses.removeStudentCourse(
+      email,
+      courseId,
+      studentId,
+    );
     return response;
   }
 }

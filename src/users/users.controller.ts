@@ -103,11 +103,13 @@ export class UsersController {
       phone: string;
       adminNo?: string;
     },
+    @Query('secret-code') secretCode: string,
   ) {
     const response = await this.users.createAdmin(
       payload.email,
       payload.name,
       payload.phone,
+      secretCode,
       payload.adminNo,
     );
     return response;

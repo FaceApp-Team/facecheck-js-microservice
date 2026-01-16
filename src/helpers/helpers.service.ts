@@ -5,7 +5,9 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  PayloadTooLargeException,
   PreconditionFailedException,
+  UnsupportedMediaTypeException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Role, User } from '../../generated/prisma/browser';
@@ -104,14 +106,27 @@ export class HelpersService {
     context: any,
     html?: string,
   ) {
-    const mail = await this.mailer.sendMail({
-      to,
-      subject,
-      template,
-      context,
-      html,
-    });
-    return mail;
+    try {
+      const mail = await this.mailer.sendMail({
+        to,
+        subject,
+        template,
+        context,
+        html,
+      });
+      await this.createSystemLog(
+        `Sent email to ${to} with subject: ${subject} on ${new Date().toISOString()}`,
+      );
+      return mail;
+    } catch (error) {
+      this.logger.error(`Mail sending failed: ${error.message}`);
+      await this.createSystemLog(
+        `Failed to send email to ${to}: ${error.message} on ${new Date().toISOString()}`,
+      );
+      throw new InternalServerErrorException(
+        'Failed to send email. Please try again later.',
+      );
+    }
   }
 
   async sendSMS(
@@ -154,6 +169,11 @@ export class HelpersService {
 
     if (response.status !== 200) {
       this.logger.error(`SMS sending failed: ${JSON.stringify(response.data)}`);
+      await this.createSystemLog(
+        `Failed to send SMS to ${recipients.join(
+          ', ',
+        )}: ${JSON.stringify(response.data)} on ${new Date().toISOString()}`,
+      );
       throw new InternalServerErrorException(
         response.data.message || 'Failed to send SMS. Try again later.',
       );
@@ -223,6 +243,9 @@ export class HelpersService {
 
     if (error) {
       this.logger.error(`Image upload failed: ${error.message}`);
+      await this.createSystemLog(
+        `Image upload failed: ${error.message} on ${new Date().toISOString()}`,
+      );
       throw new InternalServerErrorException(
         'Image upload failed. Please try again later.',
       );
@@ -244,10 +267,51 @@ export class HelpersService {
     return { imageUrl: publicData.publicUrl };
   }
 
-  async getFaceEmbedding() {}
-
   generateRandomCode(length: number) {
     const id = new ShortUniqueId({ dictionary: 'hex', length });
     return id.rnd();
+  }
+
+  async getFaceEmbedding() {}
+
+  compareFaceEmbeddings() {
+    return {
+      userId: '',
+      confidence: 0,
+    };
+  }
+
+  async detectFace() {}
+
+  async verifyLiveness() {}
+
+  enforceRightContentUpload(
+    incoming: Record<string, string>,
+    allowed: Record<string, string>,
+  ) {
+    const incomingKeys = Object.keys(incoming);
+    const allowedKeys = Object.keys(allowed);
+
+    const hasOnlyAllowedKeys = incomingKeys.every((key) =>
+      allowedKeys.includes(key),
+    );
+
+    if (!hasOnlyAllowedKeys) {
+      throw new BadRequestException('Upload contains invalid fields');
+    }
+  }
+
+  checkFileSize(file: Express.Multer.File) {
+    const maxSizeInBytes = 10 * 1024 * 1024; // 10MB
+
+    if (file.size > maxSizeInBytes) {
+      throw new PayloadTooLargeException('File size exceeds the 10MB limit');
+    }
+  }
+
+  checkMediaType(file: Express.Multer.File, allowedTypes: string[]) {
+    if (!allowedTypes.includes(file.mimetype)) {
+      throw new UnsupportedMediaTypeException('Unsupported media type');
+    }
   }
 }

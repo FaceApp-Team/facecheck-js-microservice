@@ -12,6 +12,7 @@ import { HelpersService } from '../helpers/helpers.service';
 import * as bcrypt from 'bcrypt';
 import { ImageProducer } from '../producers/image.producer';
 import { AuthDto } from '../dto/auth.dto';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class UsersService {
@@ -20,6 +21,7 @@ export class UsersService {
     private readonly prisma: PrismaService,
     private readonly helpers: HelpersService,
     private readonly imageProducer: ImageProducer,
+    private readonly configService: ConfigService,
   ) {}
 
   /*conditionally adding the user based on their roles*/
@@ -50,6 +52,15 @@ export class UsersService {
           image: user.imageUrl,
         };
       }
+
+      this.helpers.checkFileSize(file);
+
+      this.helpers.checkMediaType(file, [
+        'image/jpeg',
+        'image/png',
+        'image/jpg',
+        'image/webp',
+      ]);
 
       const { imageUrl } = await this.helpers.uploadImage(
         file.buffer,
@@ -254,6 +265,11 @@ export class UsersService {
         userId: transaction.userId,
       });
 
+      await this.helpers.sendSMS(
+        [payload.phone],
+        `Hello ${payload.fullName}, your staff account has been created. Your temporary password is: ${randomPassword}. Please change it after your first login.`,
+      );
+
       return {
         message: 'Lecturer enrolled successfully',
         lecturer: transaction.updatedUser,
@@ -340,6 +356,11 @@ export class UsersService {
         userId: transaction.userId,
       });
 
+      await this.helpers.sendSMS(
+        [payload.phone],
+        `Hello ${payload.fullName}, your staff account has been created. Your temporary password is: ${randomPassword}. Please change it after your first login.`,
+      );
+
       return {
         message: 'Staff enrolled successfully',
         staff: transaction.updatedUser,
@@ -360,7 +381,7 @@ export class UsersService {
   }
 
   async updateUserDetails(email: string, authDto?: Partial<AuthDto>) {
-    const user = await this.helpers.getUser(decodeURIComponent(email));
+    const user = await this.helpers.getUser(email);
 
     const updateData: any = {};
 
@@ -395,6 +416,15 @@ export class UsersService {
       where: { id: user.id },
       data: updateData,
     });
+
+    await this.helpers.createSystemLog(
+      `User details updated for ${user.email} on ${new Date().toISOString()}`,
+    );
+
+    await this.helpers.createUserLog(
+      user.email!,
+      `Your user details were updated on ${new Date().toISOString()}`,
+    );
 
     return {
       message: 'User details updated successfully',
@@ -656,10 +686,75 @@ export class UsersService {
     };
   }
 
+  async removeCourseRep(courseId: string, studentId: string, email: string) {
+    if (!courseId || !studentId) {
+      throw new BadRequestException('Course ID and Student ID are required');
+    }
+    const user = await this.helpers.getUser(email);
+
+    if (
+      user.role !== Role.ADMIN &&
+      user.role !== Role.SYSTEM_ADMIN &&
+      user.role !== Role.STAFF
+    ) {
+      throw new ForbiddenException('Not authorized to remove course reps');
+    }
+
+    const rep = await this.prisma.courseRep.findUnique({
+      where: {
+        studentId_courseId: {
+          studentId,
+          courseId,
+        },
+      },
+    });
+
+    const student = await this.prisma.student.findUnique({
+      where: { id: studentId },
+      include: {
+        user: {
+          select: { phone: true, email: true, name: true },
+        },
+      },
+    });
+
+    if (!rep) {
+      throw new NotFoundException('Course representative not found');
+    }
+
+    await this.prisma.courseRep.delete({
+      where: {
+        studentId_courseId: {
+          studentId,
+          courseId,
+        },
+      },
+    });
+
+    await this.helpers.sendSMS(
+      [student!.user.phone],
+      `The course representative role for course ID ${courseId} has been removed.`,
+    );
+
+    await this.helpers.createSystemLog(
+      `Course representative removed for course ID ${courseId} and student ID ${studentId} by ${user.name} on ${new Date().toISOString()}`,
+    );
+
+    await this.helpers.createUserLog(
+      student!.user.email,
+      `You have been removed as the Course Representative for course ID ${courseId} on ${new Date().toISOString()}`,
+    );
+    return {
+      success: true,
+      message: 'Course representative removed successfully',
+    };
+  }
+
   async createAdmin(
     email: string,
     name: string,
     phone: string,
+    secretCode: string,
     adminNo?: string,
   ) {
     if (!email || !name || !phone) {
@@ -675,6 +770,10 @@ export class UsersService {
 
     if (existingUser) {
       throw new BadRequestException('User with this email already exists');
+    }
+
+    if (secretCode !== this.configService.get<string>('app.secretCode')) {
+      throw new ForbiddenException('Invalid secret code for admin creation');
     }
 
     // Generate random password
@@ -709,6 +808,14 @@ export class UsersService {
       return { user, admin };
     });
 
+    await this.helpers.sendSMS(
+      [phone],
+      `Hello ${name}, your admin account has been created. Your temporary password is: ${randomPassword}. Please change it after your first login.`,
+    );
+
+    await this.helpers.createSystemLog(
+      `New admin created: ${email} by SYSTEM on ${new Date().toISOString()}`,
+    );
     return {
       message: 'Admin created successfully',
       data: {
