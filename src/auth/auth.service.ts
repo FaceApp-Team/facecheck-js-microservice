@@ -48,6 +48,12 @@ export class AuthService {
         user: existingUser,
       };
 
+    //check for right content upload
+    this.helpers.enforceRightContentUpload(
+      payload as Record<string, any>,
+      AuthDto as Record<string, any>,
+    );
+
     // validate email
     if (process.env.NODE_ENV === 'production') {
       this.helpers.enforceMailType(
@@ -90,6 +96,9 @@ export class AuthService {
         where: { email: payload.email },
       });
       this.logger.error(emailError.message);
+      await this.helpers.createSystemLog(
+        `User registration failed for email: ${payload.email} due to email sending error at ${new Date().toISOString()}`,
+      );
       throw new PreconditionFailedException(
         'Failed to send verification email. Please try again.',
       );
@@ -98,12 +107,6 @@ export class AuthService {
     //create system log
     await this.helpers.createSystemLog(
       `New user registered with email: ${payload.email} at ${new Date().toISOString()}`,
-    );
-
-    //create user log
-    await this.helpers.createUserLog(
-      user.email,
-      `User registered with email: ${payload.email} at ${new Date().toISOString()}`,
     );
 
     return {
@@ -137,6 +140,14 @@ export class AuthService {
           accountLockedUntil: new Date(now.getTime() + 60 * 60 * 1000),
         },
       });
+      await this.helpers.createSystemLog(
+        `User account locked due to excessive login attempts: ${payload.email} at ${new Date().toISOString()}`,
+      );
+
+      await this.helpers.createUserLog(
+        payload.email,
+        `Account locked for 1 hr due to excessive login attempts at ${new Date().toISOString()}`,
+      );
       throw new ForbiddenException(
         'Maximum login attempts exceeded. Account will be locked for 1 hr.',
       );
@@ -248,13 +259,8 @@ export class AuthService {
 
     //check if retries exceeded
     if (retries >= 3) {
-      //delete user data after max retries exceeded
-      await this.prisma.user.delete({
-        where: { email },
-      });
-      throw new ForbiddenException(
-        'Maximum email verification attempts exceeded. Data will be deleted',
-      );
+      //return on exceeded retries
+      return;
     }
 
     //check if email codes match

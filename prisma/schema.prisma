@@ -76,13 +76,13 @@ model CourseEnrollment {
 }
 
 model Staff {
-  id      String @id @default(cuid())
-  userId  String @unique @map("user_id")
-  staffNo String @unique @map("staff_no")
-
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  id            String   @id @default(cuid())
+  userId        String   @unique @map("user_id")
+  staffNo       String   @unique @map("staff_no")
+  recipientCode String?  @map("recipient_code")
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
 
   @@map("staffs")
 }
@@ -128,15 +128,16 @@ model Student {
 }
 
 model Lecturer {
-  id         String           @id @default(cuid())
-  userId     String           @unique @map("user_id")
-  staffNo    String?          @unique
-  hourlyRate Float            @default(0.0) @map("hourly_rate")
-  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  courses    CourseLecturer[]
-  createdAt  DateTime         @default(now()) @map("created_at")
-  updatedAt  DateTime         @updatedAt @map("updated_at")
-  sessions   Session[]
+  id            String           @id @default(cuid())
+  userId        String           @unique @map("user_id")
+  staffNo       String?          @unique
+  recipientCode String?          @map("recipient_code")
+  hourlyRate    Float            @default(0.0) @map("hourly_rate")
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courses       CourseLecturer[]
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+  sessions      Session[]
 
   @@map("lecturers")
 }
@@ -152,7 +153,7 @@ model Session {
   course          Course?       @relation(fields: [courseId], references: [id], onDelete: Cascade)
   courseId        String?       @map("course_id")
   startTime       DateTime      @default(now()) @map("start_time")
-  endTime         DateTime?     @map("end_time")
+  endTime         DateTime      @map("end_time")
   mode            SessionMode   @default(CHECK_IN)
   type            SessionType   @default(CLASS)
   lateThreshold   Int           @default(30) @map("late_threshold") // in minutes
@@ -167,13 +168,15 @@ model Session {
 }
 
 model Attendance {
-  id         String           @id @default(cuid())
-  sessionId  String           @map("session_id")
-  userId     String           @map("user_id")
-  timestamp  DateTime         @default(now())
-  confidence Float?
-  source     String? // kiosk, mobile, admin
-  status     AttendanceStatus @default(PRESENT)
+  id           String           @id @default(cuid())
+  sessionId    String           @map("session_id")
+  userId       String           @map("user_id")
+  timestamp    DateTime         @default(now())
+  checkInTime  DateTime?        @map("check_in_time")
+  checkOutTime DateTime?        @map("check_out_time")
+  confidence   Float?
+  source       String? // kiosk, mobile, admin
+  status       AttendanceStatus @default(PRESENT)
 
   session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -240,6 +243,8 @@ enum AttendanceStatus {
   PRESENT
   LATE
   EXCUSED
+  ABSENT
+  CHECKED_IN
 }
 
 enum Role {
