@@ -1,3 +1,5 @@
+import { AppController } from './app/app.controller';
+import { HealthModule } from './health/health.module';
 import { PayrollModule } from './payroll/payroll.module';
 import { PayrollController } from './payroll/payroll.controller';
 import { AttendanceModule } from './attendance/attendance.module';
@@ -19,8 +21,6 @@ import { AuthModule } from './auth/auth.module';
 import { AuthService } from './auth/auth.service';
 import { AuthController } from './auth/auth.controller';
 import { Module } from '@nestjs/common';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { PrismaService } from './prisma/prisma.service';
 import { HelpersService } from './helpers/helpers.service';
@@ -40,9 +40,13 @@ import { ImageProducer } from './producers/image.producer';
 import { SessionsService } from './sessions/sessions.service';
 import { AttendanceService } from './attendance/attendance.service';
 import { PayrollService } from './payroll/payroll.service';
+import { SystemService } from './app/app.service';
+import { TerminusModule } from '@nestjs/terminus';
 
 @Module({
   imports: [
+    HealthModule,
+    TerminusModule,
     PayrollModule,
     AttendanceModule,
     NotifcationsModule,
@@ -102,6 +106,7 @@ import { PayrollService } from './payroll/payroll.service';
     AuthModule,
   ],
   controllers: [
+    AppController,
     PayrollController,
     AttendanceController,
     NotificationsController,
@@ -119,7 +124,6 @@ import { PayrollService } from './payroll/payroll.service';
       useClass: ThrottlerGuard,
     },
     AuthService,
-    AppService,
     PrismaService,
     HelpersService,
     JwtService,
@@ -128,6 +132,7 @@ import { PayrollService } from './payroll/payroll.service';
     ImageProducer,
     AttendanceService,
     PayrollService,
+    SystemService,
   ],
 })
 export class AppModule {}

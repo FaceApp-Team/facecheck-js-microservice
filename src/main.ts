@@ -7,8 +7,9 @@ import { join } from 'path';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 
 configDotenv();
+let app: NestExpressApplication;
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.setGlobalPrefix('api');
   app.enableCors({
     origin: ['*'],
@@ -37,8 +38,13 @@ async function bootstrap() {
       transform: true,
     }),
   );
+  app.enableShutdownHooks();
 
   app.set('trust proxy', true);
   await app.listen(process.env.PORT ?? 3000);
 }
 bootstrap();
+
+export function getAppInstance() {
+  return app;
+}

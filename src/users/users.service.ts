@@ -59,7 +59,6 @@ export class UsersService {
         'image/jpeg',
         'image/png',
         'image/jpg',
-        'image/webp',
       ]);
 
       const { imageUrl } = await this.helpers.uploadImage(
@@ -125,14 +124,6 @@ export class UsersService {
 
         return { updatedUser, userId: user.id };
       });
-
-      if (user.embeddingStatus === ImageStatus.UPLOADED) {
-        return {
-          message:
-            'Student enrolled successfully. Image already processed previously.',
-          student: transaction.updatedUser,
-        };
-      }
 
       if (user.embeddingStatus === ImageStatus.COMPLETED) {
         return {
