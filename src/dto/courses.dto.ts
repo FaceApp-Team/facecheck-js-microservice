@@ -14,6 +14,6 @@ export class CoursesDto {
   courseCode: string;
 
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   lecturerId: string;
 }

@@ -13,6 +13,8 @@ import { SessionsService } from './sessions.service';
 import { SessionsDto } from '../dto/sessions.dto';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Roles } from '../decorators/roles.decorator';
+import { Role } from '../../generated/prisma/enums';
 
 @Controller('sessions')
 export class SessionsController {
@@ -106,6 +108,30 @@ export class SessionsController {
       payload,
       email,
     );
+    return response;
+  }
+
+  @Get('/approve')
+  @UseGuards(JwtAuthGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
+  async approveSession(
+    @Query('sessionId') sessionId: string,
+    @Req() req: Request,
+  ) {
+    const email = (req.user as any)?.email;
+    const response = await this.sessions.approveSession(sessionId, email);
+    return response;
+  }
+
+  @Get('/disprove')
+  @UseGuards(JwtAuthGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
+  async disproveSession(
+    @Query('sessionId') sessionId: string,
+    @Req() req: Request,
+  ) {
+    const email = (req.user as any)?.email;
+    const response = await this.sessions.disproveSession(sessionId, email);
     return response;
   }
 }

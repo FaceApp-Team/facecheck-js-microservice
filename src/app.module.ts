@@ -30,7 +30,7 @@ import { MailerModule } from '@nestjs-modules/mailer';
 import { EjsAdapter } from '@nestjs-modules/mailer/dist/adapters/ejs.adapter';
 import { BullModule } from '@nestjs/bullmq';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { join } from 'path';
 import { HttpModule } from '@nestjs/axios';
 import { MulterModule } from '@nestjs/platform-express';
@@ -42,9 +42,14 @@ import { AttendanceService } from './attendance/attendance.service';
 import { PayrollService } from './payroll/payroll.service';
 import { SystemService } from './app/app.service';
 import { TerminusModule } from '@nestjs/terminus';
+import { CacheInterceptor, CacheModule } from '@nestjs/cache-manager';
 
 @Module({
   imports: [
+    CacheModule.register({
+      ttl: 3600000,
+      isGlobal: true,
+    }),
     HealthModule,
     TerminusModule,
     PayrollModule,
@@ -122,6 +127,10 @@ import { TerminusModule } from '@nestjs/terminus';
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: CacheInterceptor,
     },
     AuthService,
     PrismaService,

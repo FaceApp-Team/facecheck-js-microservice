@@ -13,7 +13,7 @@ export class ImageProducer {
       attempts: 3,
       backoff: {
         type: 'exponential',
-        delay: 5000,
+        delay: 10000,
       },
       removeOnComplete: true,
       removeOnFail: false,

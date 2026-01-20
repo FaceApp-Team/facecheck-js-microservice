@@ -15,18 +15,24 @@ import { UsersDto } from '../dto/users.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Request } from 'express';
+import { Roles } from '../decorators/roles.decorator';
+import { Role } from '../../generated/prisma/enums';
 
 @Controller('users')
 export class UsersController {
   constructor(private readonly users: UsersService) {}
 
   @Post('/enroll')
+  @UseGuards(JwtAuthGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.STUDENT)
   @UseInterceptors(FileInterceptor('image'))
   async enrollUser(
     @Body() payload: Partial<UsersDto>,
     @UploadedFile('image') image: Express.Multer.File,
+    @Req() req: Request,
   ) {
-    const response = await this.users.enrollUser(payload, image);
+    const email = (req.user as any)?.email;
+    const response = await this.users.enrollUser(payload, image, email);
     return response;
   }
 

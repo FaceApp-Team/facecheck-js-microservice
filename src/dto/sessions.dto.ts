@@ -2,7 +2,6 @@ import {
   IsDateString,
   IsEnum,
   IsNotEmpty,
-  IsNumber,
   IsOptional,
   IsString,
 } from 'class-validator';
@@ -32,14 +31,6 @@ export class SessionsDto {
   @IsString()
   @IsOptional()
   location: string;
-
-  @IsNumber()
-  @IsNotEmpty()
-  lateThreshold: number;
-
-  @IsNumber()
-  @IsNotEmpty()
-  absentThreshold: number;
 
   @IsDateString()
   @IsNotEmpty()

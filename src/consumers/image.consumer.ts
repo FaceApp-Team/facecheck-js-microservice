@@ -28,7 +28,7 @@ export class ImageConsumer extends WorkerHost {
           },
         });
 
-        await this.helpers.getFaceEmbedding();
+        await this.helpers.enrollFace(userId, imageUrl);
 
         await this.prisma.user.update({
           where: {

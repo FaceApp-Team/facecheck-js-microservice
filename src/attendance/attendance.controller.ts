@@ -15,6 +15,7 @@ export class AttendanceController {
   constructor(private readonly attendance: AttendanceService) {}
 
   @Get('/mark')
+  // Don't cache POST requests - they modify data
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('face'))
   async markAttendance(

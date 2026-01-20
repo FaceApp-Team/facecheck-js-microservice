@@ -1,18 +1,20 @@
 import {
   BadRequestException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { UsersDto } from '../dto/users.dto';
-import { ImageStatus, Role } from '../../generated/prisma/enums';
+import { ImageStatus, Priority, Role } from '../../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
 import { HelpersService } from '../helpers/helpers.service';
 import * as bcrypt from 'bcrypt';
 import { ImageProducer } from '../producers/image.producer';
 import { AuthDto } from '../dto/auth.dto';
 import { ConfigService } from '@nestjs/config';
+import { Cache } from 'cache-manager';
 
 @Injectable()
 export class UsersService {
@@ -22,11 +24,18 @@ export class UsersService {
     private readonly helpers: HelpersService,
     private readonly imageProducer: ImageProducer,
     private readonly configService: ConfigService,
+    @Inject('CACHE_MANAGER') private readonly cacheManager: Cache,
   ) {}
 
   /*conditionally adding the user based on their roles*/
-  async enrollUser(payload: Partial<UsersDto>, file: Express.Multer.File) {
-    //studnent registration
+  async enrollUser(
+    payload: Partial<UsersDto>,
+    file: Express.Multer.File,
+    email: string,
+  ) {
+    await this.helpers.getUser(email);
+
+    //student registration
     if (payload.role === Role.STUDENT) {
       const student = await this.prisma.student.findUnique({
         where: { studentId: payload.studentId },
@@ -88,6 +97,7 @@ export class UsersService {
           throw new BadRequestException('Courses are required for student');
         }
 
+        // Fetch courses directly - no caching needed for enrollment transaction
         const courses = await tx.course.findMany({
           where: { code: { in: payload.courses } },
         });
@@ -410,11 +420,13 @@ export class UsersService {
 
     await this.helpers.createSystemLog(
       `User details updated for ${user.email} on ${new Date().toISOString()}`,
+      Priority.LOW,
     );
 
     await this.helpers.createUserLog(
       user.email!,
       `Your user details were updated on ${new Date().toISOString()}`,
+      Priority.LOW,
     );
 
     return {
@@ -578,14 +590,38 @@ export class UsersService {
   }
 
   async getAllUsers() {
-    const users = await this.prisma.user.findMany({
-      include: {
-        student: true,
-        lecturer: true,
-        staff: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+    const cacheKey = 'users:all';
+    let users;
+
+    try {
+      const cached = await this.cacheManager.get(cacheKey);
+      if (cached) {
+        this.logger.log('Cache hit: all users');
+        users = cached;
+      }
+    } catch (error) {
+      this.logger.warn('Cache read failed for all users', error.message);
+    }
+
+    if (!users) {
+      users = await this.prisma.user.findMany({
+        include: {
+          student: true,
+          lecturer: true,
+          staff: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (users.length > 0) {
+        try {
+          await this.cacheManager.set(cacheKey, users, 300000); // 5 minutes
+        } catch (error) {
+          this.logger.warn('Cache write failed for all users', error.message);
+        }
+      }
+    }
+
     return {
       users,
     };
@@ -601,18 +637,50 @@ export class UsersService {
     if (
       user.role !== Role.ADMIN &&
       user.role !== Role.SYSTEM_ADMIN &&
-      user.role !== Role.STAFF
+      user.role !== Role.STAFF &&
+      user.role !== Role.LECTURER
     ) {
       throw new ForbiddenException('Not authorized to assign course reps');
     }
 
-    const course = await this.prisma.course.findUnique({
-      where: { id: courseId },
-    });
+    const cacheKey = `course:${courseId}:details`;
+    let course;
+
+    try {
+      const cached = await this.cacheManager.get(cacheKey);
+      if (cached) {
+        this.logger.log(`Cache hit: course ${courseId}`);
+        course = cached;
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Cache read failed for course ${courseId}`,
+        error.message,
+      );
+    }
+
+    if (!course) {
+      course = await this.prisma.course.findUnique({
+        where: { id: courseId },
+      });
+
+      if (course) {
+        try {
+          await this.cacheManager.set(cacheKey, course, 600000); // 10 minutes
+        } catch (error) {
+          this.logger.warn(
+            `Cache write failed for course ${courseId}`,
+            error.message,
+          );
+        }
+      }
+    }
 
     if (!course) {
       throw new NotFoundException('Course not found');
     }
+
+    await this.cacheManager.set(`rep_courses_codes_${courseId}`, course);
 
     const student = await this.prisma.student.findUnique({
       where: { id: studentId },
@@ -729,11 +797,13 @@ export class UsersService {
 
     await this.helpers.createSystemLog(
       `Course representative removed for course ID ${courseId} and student ID ${studentId} by ${user.name} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
 
     await this.helpers.createUserLog(
       student!.user.email,
       `You have been removed as the Course Representative for course ID ${courseId} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
     return {
       success: true,
@@ -806,6 +876,7 @@ export class UsersService {
 
     await this.helpers.createSystemLog(
       `New admin created: ${email} by SYSTEM on ${new Date().toISOString()}`,
+      Priority.CRITICAL,
     );
     return {
       message: 'Admin created successfully',
@@ -824,5 +895,122 @@ export class UsersService {
         tempPassword: randomPassword,
       },
     };
+  }
+
+  async fetchStudents(email: string) {
+    const user = await this.helpers.getUser(email);
+
+    if (
+      user.role !== Role.ADMIN &&
+      user.role !== Role.SYSTEM_ADMIN &&
+      user.role !== Role.STAFF &&
+      user.role !== Role.LECTURER
+    ) {
+      throw new ForbiddenException('Not authorized to view students');
+    }
+
+    const students = await this.prisma.student.findMany({
+      include: {
+        user: {
+          select: { id: true, email: true, name: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return {
+      students,
+    };
+  }
+
+  async updateThresholds(
+    email: string,
+    thresholds: { lateThreshold: number; absentThreshold: number },
+  ) {
+    const user = await this.helpers.getUser(email);
+
+    if (user.role !== Role.LECTURER && user.role !== Role.REP) {
+      throw new ForbiddenException(
+        'Only lecturers and course reps can update their thresholds',
+      );
+    }
+
+    if (user.role === Role.LECTURER) {
+      const lecturer = await this.prisma.lecturer.findUnique({
+        where: { userId: user.id },
+        include: { thresholds: true },
+      });
+
+      if (!lecturer) {
+        throw new NotFoundException('Lecturer profile not found');
+      }
+
+      const updatedThresholds = await this.prisma.thresholds.upsert({
+        where: { lecturerId: lecturer.id },
+        update: {
+          lateThreshold: thresholds.lateThreshold,
+          absentThreshold: thresholds.absentThreshold,
+        },
+        create: {
+          lecturerId: lecturer.id,
+          absentThreshold: thresholds.absentThreshold,
+          lateThreshold: thresholds.lateThreshold,
+        },
+      });
+
+      await this.helpers.createUserLog(
+        user.email!,
+        `Your thresholds were updated on ${new Date().toISOString()}`,
+        Priority.MEDIUM,
+      );
+
+      return {
+        message: 'Thresholds updated successfully',
+        thresholds: updatedThresholds,
+      };
+    } else if (user.role === Role.REP) {
+      const rep = await this.prisma.student.findFirst({
+        where: { userId: user.id },
+        include: {
+          courseReps: {
+            include: {
+              thresholds: {
+                select: { lateThreshold: true, absentThreshold: true },
+              },
+            },
+          },
+        },
+      });
+
+      if (!rep) {
+        throw new NotFoundException('Student record not found');
+      }
+
+      const updatedThresholds = await this.prisma.thresholds.upsert({
+        where: {
+          courseRepId: rep.courseReps[0]?.id,
+        },
+        update: {
+          lateThreshold: thresholds.lateThreshold,
+          absentThreshold: thresholds.absentThreshold,
+        },
+        create: {
+          courseRepId: rep.courseReps[0]?.id,
+          absentThreshold: thresholds.absentThreshold,
+          lateThreshold: thresholds.lateThreshold,
+        },
+      });
+
+      await this.helpers.createUserLog(
+        user.email!,
+        `Your thresholds were updated on ${new Date().toISOString()}`,
+        Priority.MEDIUM,
+      );
+
+      return {
+        message: 'Thresholds updated successfully',
+        thresholds: updatedThresholds,
+      };
+    }
   }
 }

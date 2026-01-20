@@ -48,12 +48,14 @@ export class AuthController {
       oldPassword: string;
       newPassword: string;
     },
+    @Query('resetCode') resetCode: string,
   ) {
     const email = (req.user as any)?.email;
     const response = await this.auth.resetPassword(
       payload.newPassword,
       payload.oldPassword,
       email,
+      resetCode,
     );
     return response;
   }

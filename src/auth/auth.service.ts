@@ -11,10 +11,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuthDto } from '../dto/auth.dto';
 import { HelpersService } from '../helpers/helpers.service';
 import * as bcrypt from 'bcrypt';
-import { Role } from '../../generated/prisma/enums';
+import { AccountStatus, Priority, Role } from '../../generated/prisma/enums';
 import { JwtService } from '@nestjs/jwt';
 import { randomInt } from 'crypto';
 import { User } from '../../generated/prisma/browser';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class AuthService {
@@ -23,6 +24,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly helpers: HelpersService,
+    private readonly config: ConfigService,
   ) {}
 
   /*
@@ -43,19 +45,10 @@ export class AuthService {
     });
 
     if (existingUser)
-      return {
-        message: 'User with this email already exists',
-        user: existingUser,
-      };
-
-    //check for right content upload
-    this.helpers.enforceRightContentUpload(
-      payload as Record<string, any>,
-      AuthDto as Record<string, any>,
-    );
+      throw new ConflictException('User with this email already exists');
 
     // validate email
-    if (process.env.NODE_ENV === 'production') {
+    if (this.config.get<string>('app.env') === 'production') {
       this.helpers.enforceMailType(
         /^[a-z0-9A-Z]+@st\.comas\.edu\.gh$/,
         payload.email,
@@ -98,6 +91,7 @@ export class AuthService {
       this.logger.error(emailError.message);
       await this.helpers.createSystemLog(
         `User registration failed for email: ${payload.email} due to email sending error at ${new Date().toISOString()}`,
+        Priority.LOW,
       );
       throw new PreconditionFailedException(
         'Failed to send verification email. Please try again.',
@@ -107,6 +101,7 @@ export class AuthService {
     //create system log
     await this.helpers.createSystemLog(
       `New user registered with email: ${payload.email} at ${new Date().toISOString()}`,
+      Priority.LOW,
     );
 
     return {
@@ -127,6 +122,28 @@ export class AuthService {
 
     const user = await this.helpers.getUser(payload.email);
 
+    if (user.email !== payload.email) {
+      throw new UnauthorizedException('Invalid email provided');
+    }
+
+    if (!user.isActive) {
+      throw new UnauthorizedException('Email not verified');
+    }
+
+    if (
+      user.accountStatus === AccountStatus.SUSPENDED ||
+      user.accountStatus === AccountStatus.INACTIVE
+    ) {
+      throw new ForbiddenException(
+        `Account is ${user.accountStatus.toLowerCase()}`,
+      );
+    }
+
+    //compare passwords
+    if (!user.password) {
+      throw new UnauthorizedException('No password set for this user');
+    }
+
     if (user.accountLockedUntil && user.accountLockedUntil > new Date()) {
       throw new ForbiddenException('Account is temporarily locked');
     }
@@ -142,20 +159,17 @@ export class AuthService {
       });
       await this.helpers.createSystemLog(
         `User account locked due to excessive login attempts: ${payload.email} at ${new Date().toISOString()}`,
+        Priority.LOW,
       );
 
       await this.helpers.createUserLog(
         payload.email,
         `Account locked for 1 hr due to excessive login attempts at ${new Date().toISOString()}`,
+        Priority.LOW,
       );
       throw new ForbiddenException(
         'Maximum login attempts exceeded. Account will be locked for 1 hr.',
       );
-    }
-
-    //compare passwords
-    if (!user.password) {
-      throw new UnauthorizedException('Invalid credentials');
     }
 
     const passwordMatch = await bcrypt.compare(payload.password, user.password);
@@ -169,12 +183,12 @@ export class AuthService {
           loginRetries: { increment: 1 },
         },
       });
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException('Incorrect password provided');
     }
 
     const token = this.jwt.sign(
-      { id: user.id, email: user.email },
-      { secret: process.env.JWT_SECRET },
+      { id: user.id, email: user.email, role: user.role },
+      { secret: this.config.get<string>('jwt.secret') },
     );
 
     //reset login retries on successful login
@@ -188,13 +202,15 @@ export class AuthService {
 
     //create user log
     await this.helpers.createUserLog(
-      user.email!,
+      user.email,
       `Account logged in at ${new Date().toISOString()}`,
+      Priority.LOW,
     );
 
     //create system log
     await this.helpers.createSystemLog(
       `User logged in with email: ${user.email} at ${new Date().toISOString()}`,
+      Priority.LOW,
     );
 
     return { token, role: user.role ?? Role.STUDENT };
@@ -207,9 +223,9 @@ export class AuthService {
   ) {
     //get base URL from environment or use default
     const baseUrl =
-      process.env.NODE_ENV === 'production'
-        ? process.env.APP_PROD_URL || 'http://localhost:3000'
-        : process.env.APP_DEV_URL || 'http://localhost:3000';
+      this.config.get<string>('app.env') === 'production'
+        ? this.config.get<string>('app.prodUrl') || 'http://localhost:3000'
+        : this.config.get<string>('app.devUrl') || 'http://localhost:3000';
     const verificationLink = `${baseUrl}/api/auth/verify-email?email=${encodeURIComponent(email)}&code=${code}`;
 
     //send email with verification link
@@ -234,6 +250,7 @@ export class AuthService {
     //create system log
     await this.helpers.createSystemLog(
       `Verification code sent to email: ${email} at ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
 
     return { message: 'Verification code sent to email' };
@@ -310,11 +327,13 @@ export class AuthService {
     await this.helpers.createUserLog(
       email,
       `Email verified at ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
 
     //create system log
     await this.helpers.createSystemLog(
       `Email verified for user: ${email} at ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
 
     return { message: 'Email verified successfully' };
@@ -334,7 +353,7 @@ export class AuthService {
     //send the password reset code
     await this.helpers.sendSMS(
       recipients,
-      `Hello! Requested password reset code: ${code}. Ignore if you did not request.`,
+      `Hello! Requested password reset code for ${this.config.get<string>('app.name')} : ${code}. Ignore if you did not request.`,
     );
     //update user with password reset code and timestamp
     await this.prisma.user.update({
@@ -349,11 +368,13 @@ export class AuthService {
     await this.helpers.createUserLog(
       email,
       `Password reset code sent to phone at ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
 
     //create system log
     await this.helpers.createSystemLog(
       `Password reset code sent to phone for user: ${email} at ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
 
     return { message: 'Password reset code sent to phone' };
@@ -363,28 +384,31 @@ export class AuthService {
     newPassword: string,
     oldPassword: string,
     email: string,
-    resetCode?: string,
+    resetCode: string,
   ) {
     const user = await this.helpers.getUser(email);
 
     // reset code must exist
-    if (!user.passwordResetCode || !resetCode) {
+    if (
+      (!user.passwordResetCode && user.isPasswordChanged) ||
+      (!resetCode && user.isPasswordChanged)
+    ) {
       throw new BadRequestException('Password reset code is required');
     }
 
     // check reset code expiry
-    if (!user.resetCodeCreatedAt) {
+    if (!user.resetCodeCreatedAt && user.isPasswordChanged) {
       throw new BadRequestException('Reset code metadata missing');
     }
 
-    const hours = (Date.now() - user.resetCodeCreatedAt.getTime()) / 3_600_000;
+    const hours = (Date.now() - user.resetCodeCreatedAt!.getTime()) / 3_600_000;
 
     if (hours > 1) {
       throw new BadRequestException('Password reset code has expired');
     }
 
     // validate reset code
-    if (resetCode !== user.passwordResetCode) {
+    if (resetCode !== user.passwordResetCode && user.isPasswordChanged) {
       throw new UnauthorizedException('Invalid password reset code');
     }
 
@@ -406,6 +430,7 @@ export class AuthService {
         password: hash,
         passwordResetCode: null,
         resetCodeCreatedAt: null,
+        isPasswordChanged: true,
       },
     });
 
@@ -413,12 +438,14 @@ export class AuthService {
     await this.helpers.createUserLog(
       email,
       `Password reset via code at ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
 
     await this.helpers.createSystemLog(
       `Password reset via code for user: ${email} at ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
 
-    return { message: 'Password reset successfully' };
+    return { message: 'Password reset successful' };
   }
 }

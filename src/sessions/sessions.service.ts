@@ -1,19 +1,31 @@
 import {
   BadRequestException,
   ForbiddenException,
+  Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { HelpersService } from '../helpers/helpers.service';
 import { SessionsDto } from '../dto/sessions.dto';
-import { Role, SessionMode, SessionStatus } from '../../generated/prisma/enums';
+import {
+  Priority,
+  Role,
+  SessionMode,
+  SessionStatus,
+} from '../../generated/prisma/enums';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 
 @Injectable()
 export class SessionsService {
+  private readonly logger = new Logger(SessionsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly helpers: HelpersService,
+    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
 
   async createSession(payload: Partial<SessionsDto>, email: string) {
@@ -42,25 +54,8 @@ export class SessionsService {
     }
 
     // Type narrowing: after validation, these are guaranteed to exist
-    const {
-      startTime,
-      endTime,
-      name,
-      type,
-      mode,
-      lateThreshold,
-      absentThreshold,
-    } = payload as Required<
-      Pick<
-        SessionsDto,
-        | 'startTime'
-        | 'endTime'
-        | 'name'
-        | 'type'
-        | 'mode'
-        | 'lateThreshold'
-        | 'absentThreshold'
-      >
+    const { startTime, endTime, name, type, mode } = payload as Required<
+      Pick<SessionsDto, 'startTime' | 'endTime' | 'name' | 'type' | 'mode'>
     >;
     const sessionName = name ?? 'Session';
     const sessionStartTime =
@@ -75,11 +70,11 @@ export class SessionsService {
       throw new BadRequestException('User email not found');
     }
 
+    // Don't cache open sessions - they're transient and change frequently
+    // Query is fast with proper indexes
     const sessions = await this.prisma.session.findMany({
       where: {
-        createdBy: {
-          id: user.id,
-        },
+        createdBy: { id: user.id },
         status: SessionStatus.OPEN,
       },
     });
@@ -106,7 +101,31 @@ export class SessionsService {
           userId: user.id,
         },
         include: {
-          courseReps: true,
+          courseReps: {
+            include: {
+              thresholds: {
+                select: { lateThreshold: true, absentThreshold: true },
+              },
+            },
+          },
+        },
+      });
+
+      const uniqueRep = await this.prisma.courseRep.findFirst({
+        where: {
+          studentId: rep?.id,
+          course: {
+            lecturers: {
+              some: {
+                lecturerId: lecturer.id,
+              },
+            },
+          },
+        },
+        include: {
+          thresholds: {
+            select: { lateThreshold: true, absentThreshold: true },
+          },
         },
       });
 
@@ -142,9 +161,8 @@ export class SessionsService {
             },
             startTime: sessionStartTime,
             endTime: sessionEndTime,
-            lateThreshold: lateThreshold,
-            absentThreshold: absentThreshold,
-            status: SessionStatus.OPEN,
+            lateThreshold: uniqueRep?.thresholds?.lateThreshold,
+            absentThreshold: uniqueRep?.thresholds?.absentThreshold,
             createdBy: {
               connect: { id: user.id },
             },
@@ -183,6 +201,17 @@ export class SessionsService {
           lecturerId: lecturer.id,
           courseId: payload.courseId,
         },
+        include: {
+          lecturer: {
+            select: {
+              userId: true,
+              id: true,
+              thresholds: {
+                select: { lateThreshold: true, absentThreshold: true },
+              },
+            },
+          },
+        },
       });
 
       if (!assignment) {
@@ -204,9 +233,8 @@ export class SessionsService {
             },
             startTime: sessionStartTime,
             endTime: sessionEndTime,
-            lateThreshold: lateThreshold,
-            absentThreshold: absentThreshold,
-            status: SessionStatus.OPEN,
+            lateThreshold: assignment.lecturer.thresholds?.lateThreshold,
+            absentThreshold: assignment.lecturer.thresholds?.absentThreshold,
             createdBy: {
               connect: { id: user.id },
             },
@@ -220,10 +248,12 @@ export class SessionsService {
       await this.helpers.createUserLog(
         user.email,
         `Session ${sessionName} created successfully on ${new Date().toISOString()}`,
+        Priority.MEDIUM,
       );
 
       await this.helpers.createSystemLog(
         `Session ${sessionName} created by ${user.name} on ${new Date().toISOString()}`,
+        Priority.MEDIUM,
       );
 
       return { success: true, data: transaction.session };
@@ -270,10 +300,22 @@ export class SessionsService {
     await this.helpers.createUserLog(
       user.email,
       `Session ${session.name} closed successfully on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
+
+    // Invalidate session caches after closing
+    try {
+      await Promise.all([
+        this.cacheManager.del(`session:${sessionId}:active`),
+        this.cacheManager.del(`sessions:user:${user.id}`),
+      ]);
+    } catch (error) {
+      this.logger.warn('Failed to invalidate session caches', error.message);
+    }
 
     await this.helpers.createSystemLog(
       `Session ${session.name} closed by ${user.name} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
     return { success: true, data: updatedSession };
   }
@@ -284,20 +326,46 @@ export class SessionsService {
     if (user.role !== Role.ADMIN && user.role !== Role.SYSTEM_ADMIN) {
       throw new ForbiddenException('Access denied. Admins only.');
     }
-    const sessions = await this.prisma.session.findMany({
-      include: {
-        createdBy: true,
-        lecturer: true,
-        course: true,
-        attendances: true,
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+
+    const cacheKey = 'sessions:admin:all';
+    let sessions;
+
+    try {
+      const cached = await this.cacheManager.get(cacheKey);
+      if (cached) {
+        this.logger.log('Cache hit: all admin sessions');
+        sessions = cached;
+      }
+    } catch (error) {
+      this.logger.warn('Cache read failed for admin sessions', error.message);
+    }
+
+    if (!sessions) {
+      sessions = await this.prisma.session.findMany({
+        include: {
+          createdBy: true,
+          lecturer: true,
+          course: true,
+          attendances: true,
+        },
+        orderBy: {
+          createdAt: 'desc',
+        },
+      });
+
+      try {
+        await this.cacheManager.set(cacheKey, sessions, 180000); // 3 minutes for admin view
+      } catch (error) {
+        this.logger.warn(
+          'Cache write failed for admin sessions',
+          error.message,
+        );
+      }
+    }
 
     await this.helpers.createSystemLog(
       `All sessions viewed by ${user.name} on ${new Date().toISOString()}`,
+      Priority.LOW,
     );
 
     if (!user.email) {
@@ -307,6 +375,7 @@ export class SessionsService {
     await this.helpers.createUserLog(
       user.email,
       `You viewed all sessions on ${new Date().toISOString()}`,
+      Priority.LOW,
     );
 
     return { success: true, data: sessions };
@@ -321,16 +390,41 @@ export class SessionsService {
       );
     }
 
-    const sessions = await this.prisma.session.findMany({
-      where: {
-        createdBy: {
-          id: user.id,
+    const cacheKey = `sessions:user:${user.id}`;
+    let sessions;
+
+    try {
+      const cached = await this.cacheManager.get(cacheKey);
+      if (cached) {
+        this.logger.log(`Cache hit: sessions for user ${user.id}`);
+        sessions = cached;
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Cache read failed for user ${user.id} sessions`,
+        error.message,
+      );
+    }
+
+    if (!sessions) {
+      sessions = await this.prisma.session.findMany({
+        where: {
+          createdBy: { id: user.id },
         },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+        orderBy: {
+          createdAt: 'desc',
+        },
+      });
+
+      try {
+        await this.cacheManager.set(cacheKey, sessions, 180000); // 3 minutes
+      } catch (error) {
+        this.logger.warn(
+          `Cache write failed for user ${user.id} sessions`,
+          error.message,
+        );
+      }
+    }
 
     if (!user.email) {
       throw new BadRequestException('User email not found');
@@ -339,10 +433,12 @@ export class SessionsService {
     await this.helpers.createUserLog(
       user.email,
       `You viewed your sessions on ${new Date().toISOString()}`,
+      Priority.LOW,
     );
 
     await this.helpers.createSystemLog(
       `Sessions for ${user.name} viewed on ${new Date().toISOString()}`,
+      Priority.LOW,
     );
 
     return {
@@ -404,11 +500,27 @@ export class SessionsService {
     await this.helpers.createUserLog(
       user.email,
       `Session ${session.name} updated successfully on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
 
     await this.helpers.createSystemLog(
       `Session ${session.name} updated by ${user.name} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
+
+    // Invalidate session caches after update
+    try {
+      await Promise.all([
+        this.cacheManager.del(`session:${sessionId}:active`),
+        this.cacheManager.del(`sessions:user:${user.id}`),
+        this.cacheManager.del('sessions:admin:all'),
+      ]);
+    } catch (error) {
+      this.logger.warn(
+        'Failed to invalidate session caches after update',
+        error.message,
+      );
+    }
 
     return {
       success: true,
@@ -474,13 +586,134 @@ export class SessionsService {
     await this.helpers.createUserLog(
       user.email,
       `Session ${session.name} mode changed to CHECK_OUT on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
 
     await this.helpers.createSystemLog(
       `Session ${session.name} mode changed to CHECK_OUT by ${user.name} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
 
+    // Invalidate session cache after mode toggle
+    try {
+      await this.cacheManager.del(`session:${sessionId}:active`);
+    } catch (error) {
+      this.logger.warn(
+        'Failed to invalidate session cache after mode toggle',
+        error.message,
+      );
+    }
+
     return { success: true, message: 'Session mode updated successfully' };
+  }
+
+  async approveSession(sessionId: string, email: string) {
+    const user = await this.helpers.getUser(email);
+
+    if (!sessionId) {
+      throw new BadRequestException('Session ID is required');
+    }
+
+    if (user.role !== Role.ADMIN && user.role !== Role.SYSTEM_ADMIN) {
+      throw new ForbiddenException('Access denied. Admins only.');
+    }
+
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      include: {
+        createdBy: {
+          select: { id: true, email: true, name: true },
+        },
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Session not found');
+    }
+
+    if (session.status === SessionStatus.OPEN) {
+      return { success: true, message: 'Session is already approved' };
+    }
+
+    await this.prisma.session.update({
+      where: { id: sessionId },
+      data: { status: SessionStatus.OPEN },
+    });
+
+    if (!session.createdBy) {
+      throw new NotFoundException('Session creator not found');
+    }
+
+    if (!user.email) {
+      throw new BadRequestException('User email not found');
+    }
+
+    await this.helpers.createUserLog(
+      session.createdBy.email,
+      `Session with ID ${sessionId} and name ${session.name} approved successfully on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+
+    await this.helpers.createSystemLog(
+      `Session with ID ${session.id} and name ${session.name} approved by ${user.name} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+
+    return { success: true, message: 'Session approved successfully' };
+  }
+
+  async disproveSession(sessionId: string, email: string) {
+    const user = await this.helpers.getUser(email);
+
+    if (!sessionId) {
+      throw new BadRequestException('Session ID is required');
+    }
+
+    if (user.role !== Role.ADMIN && user.role !== Role.SYSTEM_ADMIN) {
+      throw new ForbiddenException('Access denied. Admins only.');
+    }
+
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      include: { createdBy: { select: { email: true } } },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Session not found');
+    }
+
+    if (!session.createdBy) {
+      throw new NotFoundException('Session creator not found');
+    }
+
+    if (session.status === SessionStatus.CLOSED) {
+      return {
+        success: true,
+        message: 'Session is already closed or disproved',
+      };
+    }
+
+    await this.prisma.session.update({
+      where: { id: sessionId },
+      data: { status: SessionStatus.CLOSED },
+    });
+
+    if (!user.email) {
+      throw new BadRequestException('User email not found');
+    }
+
+    await this.helpers.createUserLog(
+      session.createdBy.email,
+      `Session with ID ${sessionId} and name ${session.name} approved successfully on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+
+    await this.helpers.createSystemLog(
+      `Session with ID ${sessionId} and name ${session.name} approved by ${user.name} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+
+    return { success: true, message: 'Session approved successfully' };
   }
 
   async deleteSession(sessionId: string, email: string) {
@@ -516,10 +749,12 @@ export class SessionsService {
     await this.helpers.createUserLog(
       user.email,
       `Session ${session.name} deleted successfully on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
 
     await this.helpers.createSystemLog(
       `Session ${session.name} deleted by ${user.name} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
     );
     return { success: true, message: 'Session deleted successfully' };
   }
