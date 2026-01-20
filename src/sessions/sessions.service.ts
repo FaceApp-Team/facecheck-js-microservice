@@ -138,7 +138,28 @@ export class SessionsService {
           lecturerId: lecturer.id ?? payload.lecturerId,
           courseId: { in: rep.courseReps.map((r) => r.courseId) },
         },
+        include: {
+          lecturer: {
+            select: {
+              hourlyRate: true,
+              creditHours: true,
+            },
+          },
+        },
       });
+
+      //check if session start time and end time does not exceed credit hours
+      if (isAuthorized) {
+        const sessionDurationHours =
+          (sessionEndTime.getTime() - sessionStartTime.getTime()) /
+          (1000 * 60 * 60);
+
+        if (sessionDurationHours > isAuthorized.lecturer.creditHours) {
+          throw new BadRequestException(
+            "Session duration exceeds lecturer's credit hours",
+          );
+        }
+      }
 
       if (!isAuthorized) {
         throw new ForbiddenException(

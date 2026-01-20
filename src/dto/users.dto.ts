@@ -21,6 +21,10 @@ export class UsersDto {
   @IsOptional()
   lecturerHourlyRate: number;
 
+  @IsNumber()
+  @IsOptional()
+  lecturerCreditHours: number;
+
   @IsString()
   @IsNotEmpty()
   email: string;

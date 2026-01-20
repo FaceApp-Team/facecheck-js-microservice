@@ -178,6 +178,12 @@ export class UsersService {
         );
       }
 
+      if (!payload.lecturerCreditHours) {
+        throw new BadRequestException(
+          'Lecturer credit hours is required for lecturer registration',
+        );
+      }
+
       const randomPassword = Math.random().toString(36).slice(-8);
 
       const hashedPassword = await bcrypt.hash(randomPassword, 10);
@@ -212,6 +218,7 @@ export class UsersService {
               connect: { id: user.id },
             },
             staffNo: payload.lecturerId,
+            creditHours: payload.lecturerCreditHours,
             hourlyRate: payload.lecturerHourlyRate
               ? parseFloat(payload.lecturerHourlyRate.toString())
               : 0.0,

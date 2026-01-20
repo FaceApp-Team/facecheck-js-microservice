@@ -148,6 +148,7 @@ model Lecturer {
   staffNo       String?          @unique
   recipientCode String?          @map("recipient_code")
   hourlyRate    Float            @default(0.0) @map("hourly_rate")
+  creditHours   Int              @default(0) @map("credit_hours")
   user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   courses       CourseLecturer[]
   createdAt     DateTime         @default(now()) @map("created_at")
@@ -176,7 +177,7 @@ model Session {
   type            SessionType   @default(CLASS)
   lateThreshold   Int           @default(30) @map("late_threshold") // in minutes
   absentThreshold Int           @default(60) @map("absent_threshold") // in minutes
-  status          SessionStatus @default(SCHEDULED)
+  status          SessionStatus @default(OPEN)
   createdBy       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt       DateTime      @default(now()) @map("created_at")
   updatedAt       DateTime      @updatedAt @map("updated_at")
@@ -234,7 +235,7 @@ model Thresholds {
   lateThreshold   Int        @default(30) @map("late_threshold") // in minutes
   absentThreshold Int        @default(60) @map("absent_threshold") // in minutes
   createdAt       DateTime   @default(now()) @map("created_at")
-  lecturerId      String?     @unique @map("lecturer_id")
+  lecturerId      String?    @unique @map("lecturer_id")
   lecturer        Lecturer?  @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
   updatedAt       DateTime   @updatedAt @map("updated_at")
   courseReps      CourseRep? @relation(fields: [courseRepId], references: [id])
