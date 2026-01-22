@@ -183,4 +183,20 @@ export class UsersController {
     const response = await this.users.getUserByEmail(email);
     return response;
   }
+
+  @Get('/by-id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    Role.ADMIN,
+    Role.SYSTEM_ADMIN,
+    Role.LECTURER,
+    Role.REP,
+    Role.STAFF,
+    Role.STUDENT,
+  )
+  async getUserById(@Req() req: Request) {
+    const id = (req.user as any)?.id;
+    const response = await this.users.getUserById(id);
+    return response;
+  }
 }
