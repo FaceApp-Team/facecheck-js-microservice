@@ -107,6 +107,10 @@ export class HelpersService {
     html?: string,
   ) {
     try {
+      this.logger.log(
+        `Attempting to send email to ${to} with template: ${template}`,
+      );
+
       const mail = await this.mailer.sendMail({
         to,
         subject,
@@ -114,20 +118,38 @@ export class HelpersService {
         context,
         html,
       });
+
+      this.logger.log(`Email sent successfully to ${to}`);
+      this.logger.debug(
+        'Mail response:',
+        JSON.stringify(
+          {
+            accepted: mail.accepted,
+            rejected: mail.rejected,
+            messageId: mail.messageId,
+            response: mail.response,
+          },
+          null,
+          2,
+        ),
+      );
+
       await this.createSystemLog(
         `Sent email to ${to} with subject: ${subject} on ${new Date().toISOString()}`,
         Priority.LOW,
       );
+
       return mail;
     } catch (error) {
-      this.logger.error(`Mail sending failed: ${error.message}`);
+      this.logger.error(`Failed to send email to ${to}:`, error.message);
+      this.logger.error('Error details:', error.stack);
+
       await this.createSystemLog(
-        `Failed to send email to ${to}: ${error.message} on ${new Date().toISOString()}`,
-        Priority.CRITICAL,
+        `Failed to send email to ${to}: ${error.message} at ${new Date().toISOString()}`,
+        Priority.HIGH,
       );
-      throw new InternalServerErrorException(
-        `Mail sending failed: ${error.message}`,
-      );
+
+      throw error;
     }
   }
 
@@ -286,7 +308,7 @@ export class HelpersService {
         });
 
       if (error) {
-        this.logger.error(`Image upload failed: ${error.message}`);
+        this.logger.error(`Image upload failed: ${error}`);
         await this.createSystemLog(
           `Image upload failed: ${error.message} on ${new Date().toISOString()}`,
           Priority.MEDIUM,
@@ -328,7 +350,10 @@ export class HelpersService {
   }
 
   async enrollFace(userId: string, imageUrl: string) {
-    const faceEnrollEndpoint = `${this.config.get<string>('face.enrollUrl')}?user_id=${userId}&image_url=${imageUrl}`;
+    const faceEnrollEndpoint =
+      this.config.get<string>('app.env') === 'production'
+        ? `${this.config.get<string>('face.prodEnrollUrl')}?user_id=${userId}&image_url=${imageUrl}`
+        : `${this.config.get<string>('face.enrollUrl')}?user_id=${userId}&image_url=${imageUrl}`;
 
     if (!faceEnrollEndpoint) {
       throw new InternalServerErrorException(
@@ -367,7 +392,10 @@ export class HelpersService {
   }
 
   async recognizeFace(imageUrl: string) {
-    const faceRecognizeEndpoint = `${this.config.get<string>('face.recognizeUrl')}?image_url=${imageUrl}`;
+    const faceRecognizeEndpoint =
+      this.config.get<string>('app.env') === 'production'
+        ? `${this.config.get<string>('face.prodRecognizeUrl')}?image_url=${imageUrl}`
+        : `${this.config.get<string>('face.recognizeUrl')}?image_url=${imageUrl}`;
 
     if (!faceRecognizeEndpoint) {
       throw new InternalServerErrorException(

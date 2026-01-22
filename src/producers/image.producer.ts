@@ -15,7 +15,7 @@ export class ImageProducer {
         type: 'exponential',
         delay: 10000,
       },
-      removeOnComplete: true,
+      removeOnComplete: false,
       removeOnFail: false,
     });
     return job;
@@ -24,9 +24,18 @@ export class ImageProducer {
   // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
   async getJobStatus(jobId: string): Promise<JobState | unknown> {
     const job = await this.imageQueue.getJob(jobId);
+    if (!jobId) {
+      throw new NotFoundException('Job not found');
+    }
     if (!job) {
       throw new NotFoundException('Job not found');
     }
-    return await job.getState();
+
+    const state = await job.getState();
+    const values = await job.returnvalue;
+    return {
+      state,
+      values,
+    };
   }
 }

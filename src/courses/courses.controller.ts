@@ -11,6 +11,7 @@ import {
 import { CoursesService } from './courses.service';
 import { CoursesDto } from '../dto/courses.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../guards/roles.guard';
 import { Request } from 'express';
 import { Roles } from '../decorators/roles.decorator';
 import { Role } from '../../generated/prisma/enums';
@@ -19,7 +20,7 @@ import { Role } from '../../generated/prisma/enums';
 export class CoursesController {
   constructor(private readonly courses: CoursesService) {}
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
   @Post('/add')
   async addCourse(@Body() payload: CoursesDto, @Req() req: Request) {
@@ -30,7 +31,7 @@ export class CoursesController {
 
   @Patch('/update')
   @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   async updateCourse(
     @Body() payload: Partial<CoursesDto>,
     @Query('courseId') courseId: string,
@@ -41,7 +42,8 @@ export class CoursesController {
     return response;
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER, Role.STUDENT)
   @Get('/all')
   async getCourses(@Req() req: Request) {
     const email = (req.user as any)?.email;
@@ -49,7 +51,7 @@ export class CoursesController {
     return response;
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Get('/remove')
   @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
   async removeCourse(@Query('courseId') courseId: string, @Req() req: Request) {
@@ -58,7 +60,7 @@ export class CoursesController {
     return response;
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
   @Get('/remove-student-course')
   async removeStudentCourse(

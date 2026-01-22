@@ -146,7 +146,7 @@ export class AttendanceService {
     }
 
     const user = await this.prisma.user.findUnique({
-      where: { id: getRecognition.userId },
+      where: { id: getRecognition.user_id },
       include: { student: { include: { enrollments: true } }, lecturer: true },
     });
 
@@ -154,7 +154,7 @@ export class AttendanceService {
       throw new NotFoundException('User not found');
     }
 
-    if (session.createdBy.id === getRecognition.userId) {
+    if (session.createdBy.id === getRecognition.user_id) {
       throw new ForbiddenException('Session creator cannot mark attendance');
     }
 
@@ -242,12 +242,12 @@ export class AttendanceService {
         Priority.MEDIUM,
       );
 
-      return attendance;
+      return { attendance: attendance, score: getRecognition.score };
     } else if (session.mode === SessionMode.CHECK_OUT) {
       const existing = await this.prisma.attendance.findUnique({
         where: {
           sessionId_userId: {
-            sessionId: session.id,
+            sessionId: sessionId,
             userId: user.id,
           },
         },

@@ -61,6 +61,7 @@ export class CoursesService {
         data: {
           code: payload.courseCode,
           title: payload.title,
+          description: payload.description,
         },
       });
 

@@ -32,8 +32,15 @@ export default () => ({
   },
   face: {
     enrollUrl: process.env.FACE_ENROLL_ENDPOINT || '',
+    prodEnrollUrl: process.env.PROD_FACE_ENROLL_ENDPOINT || '',
+    prodRecognizeUrl: process.env.PROD_FACE_RECOGNITION_ENDPOINT || '',
     minConfidenceThreshold:
       parseFloat(process.env.MIN_CONFIDENCE_THRESHOLD || '0.6') || 0.6,
     recognizeUrl: process.env.FACE_RECOGNITION_ENDPOINT || '',
+  },
+  supabase: {
+    url: process.env.SUPABASE_URL || '',
+    serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+    anonKey: process.env.SUPABASE_ANON_KEY || '',
   },
 });

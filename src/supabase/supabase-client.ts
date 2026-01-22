@@ -14,10 +14,8 @@ const keyCandidate =
   process.env.SUPABASE_KEY ||
   '';
 
-const supabaseUrl =
-  typeof urlCandidate === 'string' ? urlCandidate.trim() : urlCandidate;
-const supabaseKey =
-  typeof keyCandidate === 'string' ? keyCandidate.trim() : keyCandidate;
+const supabaseUrl = urlCandidate;
+const supabaseKey = keyCandidate;
 
 if (!supabaseKey) {
   throw new Error(

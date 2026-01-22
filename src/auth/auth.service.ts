@@ -61,11 +61,10 @@ export class AuthService {
     }
 
     // hash password
-    const salt = await bcrypt.genSalt(10);
-    const hash = await bcrypt.hash(payload.password, salt);
+    const hash = await bcrypt.hash(payload.password, 10);
 
     //generate 6 digit code
-    const code = randomInt(100000, 1_000_000).toString();
+    const code = this.helpers.generateRandomCode(6);
 
     // create user first (before sending email)
     const user = await this.prisma.user.create({
@@ -148,7 +147,7 @@ export class AuthService {
       throw new ForbiddenException('Account is temporarily locked');
     }
 
-    if ((user.loginRetries || 0) >= 3) {
+    if ((user.loginRetries || 0) >= 5) {
       //lock account for 1 hour
       const now = new Date();
       await this.prisma.user.update({
@@ -241,9 +240,21 @@ export class AuthService {
       },
     );
 
-    if (mail.rejected.length > 0) {
+    // Log full email response for debugging
+    this.logger.log(`Email sent to ${email}: ${code}`);
+    this.logger.debug('Mail response:', JSON.stringify(mail, null, 2));
+
+    if (mail.rejected && mail.rejected.length > 0) {
+      this.logger.error(`Email rejected for ${email}:`, mail.rejected);
       throw new PreconditionFailedException(
         'Failed to send verification email',
+      );
+    }
+
+    if (!mail.accepted || mail.accepted.length === 0) {
+      this.logger.error(`Email not accepted for ${email}:`, mail);
+      throw new PreconditionFailedException(
+        'Email was not accepted by mail server',
       );
     }
 
@@ -384,7 +395,7 @@ export class AuthService {
     newPassword: string,
     oldPassword: string,
     email: string,
-    resetCode: string,
+    resetCode?: string,
   ) {
     const user = await this.helpers.getUser(email);
 
@@ -401,7 +412,9 @@ export class AuthService {
       throw new BadRequestException('Reset code metadata missing');
     }
 
-    const hours = (Date.now() - user.resetCodeCreatedAt!.getTime()) / 3_600_000;
+    const hours = resetCode
+      ? (Date.now() - user.resetCodeCreatedAt!.getTime()) / 3_600_000
+      : 0;
 
     if (hours > 1) {
       throw new BadRequestException('Password reset code has expired');

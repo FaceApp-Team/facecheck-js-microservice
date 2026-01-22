@@ -29,7 +29,7 @@ export class SessionsService {
   ) {}
 
   async createSession(payload: Partial<SessionsDto>, email: string) {
-    const user = await this.helpers.getUser(decodeURIComponent(email));
+    const user = await this.helpers.getUser(email);
 
     if (!payload.name || !payload.type) {
       throw new BadRequestException(
@@ -38,11 +38,11 @@ export class SessionsService {
     }
 
     if (user.role === Role.REP && !payload.lecturerId) {
-      throw new BadRequestException('Lecturer ID is required');
+      throw new BadRequestException('Please select a lecturer for the session');
     }
 
     if (user.role === Role.LECTURER && !payload.courseId) {
-      throw new BadRequestException('Course ID is required');
+      throw new BadRequestException('Please choose a course for the session');
     }
 
     if (!payload.mode) {
@@ -88,7 +88,7 @@ export class SessionsService {
     if (user.role === Role.REP) {
       const lecturer = await this.prisma.lecturer.findUnique({
         where: {
-          staffNo: payload.lecturerId,
+          id: payload.lecturerId,
         },
       });
 
@@ -284,7 +284,7 @@ export class SessionsService {
   }
 
   async closeSession(sessionId: string, email: string) {
-    const user = await this.helpers.getUser(decodeURIComponent(email));
+    const user = await this.helpers.getUser(email);
 
     const session = await this.prisma.session.findUnique({
       where: { id: sessionId },
@@ -403,7 +403,7 @@ export class SessionsService {
   }
 
   async getSessionCreatorSessions(email: string) {
-    const user = await this.helpers.getUser(decodeURIComponent(email));
+    const user = await this.helpers.getUser(email);
 
     if (user.role !== Role.LECTURER && user.role !== Role.REP) {
       throw new ForbiddenException(

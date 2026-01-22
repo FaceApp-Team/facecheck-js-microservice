@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Inject,
   Injectable,
@@ -33,26 +34,21 @@ export class UsersService {
     file: Express.Multer.File,
     email: string,
   ) {
-    await this.helpers.getUser(email);
+    //auth check for the admin
+    const user = await this.helpers.getUser(email);
 
     //student registration
     if (payload.role === Role.STUDENT) {
+      if (!payload.studentId) {
+        throw new BadRequestException('Student ID is required for student');
+      }
+
       const student = await this.prisma.student.findUnique({
         where: { studentId: payload.studentId },
       });
 
       if (student) {
         return { message: 'Student with this ID already exists', student };
-      }
-
-      if (!payload.email) {
-        throw new BadRequestException(
-          'Email is required for student registration',
-        );
-      }
-      const user = await this.helpers.getUser(payload.email);
-      if (user.email !== payload.email) {
-        throw new BadRequestException('Email does not match user record');
       }
 
       if (user.imageStatus === ImageStatus.UPLOADED) {
@@ -153,7 +149,7 @@ export class UsersService {
         message:
           'Student enrolled successfully. Processing image in background.',
         student: transaction.updatedUser,
-        jobId: job.id,
+        jobId: job.id?.toString(), // Ensure jobId is a string
       };
     } else if (payload.role === Role.LECTURER) {
       const lecturer = await this.prisma.lecturer.findUnique({
@@ -184,7 +180,7 @@ export class UsersService {
         );
       }
 
-      const randomPassword = Math.random().toString(36).slice(-8);
+      const randomPassword = this.helpers.generateRandomCode(8);
 
       const hashedPassword = await bcrypt.hash(randomPassword, 10);
 
@@ -208,6 +204,7 @@ export class UsersService {
             phone: payload.phone ?? '',
             password: hashedPassword,
             isActive: true,
+            isPasswordChanged: false,
           },
         });
 
@@ -218,7 +215,7 @@ export class UsersService {
               connect: { id: user.id },
             },
             staffNo: payload.lecturerId,
-            creditHours: payload.lecturerCreditHours,
+            creditHours: parseInt(payload.lecturerCreditHours!.toString()),
             hourlyRate: payload.lecturerHourlyRate
               ? parseFloat(payload.lecturerHourlyRate.toString())
               : 0.0,
@@ -275,7 +272,7 @@ export class UsersService {
 
       await this.helpers.sendSMS(
         [payload.phone],
-        `Hello ${payload.fullName}, your staff account has been created. Your temporary password is: ${randomPassword}. Please change it after your first login.`,
+        `Hello ${payload.fullName}, your lecturer account has been created. Your temporary password is: ${randomPassword}. Please change it after your first login.`,
       );
 
       return {
@@ -381,11 +378,9 @@ export class UsersService {
   }
 
   async getJobStatus(jobId: string) {
-    const state = await this.imageProducer.getJobStatus(jobId);
-    if (!state) {
-      throw new BadRequestException('Job not found');
-    }
-    return { jobId, status: state };
+    const status: any = await this.imageProducer.getJobStatus(jobId);
+
+    return { state: status.state, status: status.values };
   }
 
   async updateUserDetails(email: string, authDto?: Partial<AuthDto>) {
@@ -408,19 +403,17 @@ export class UsersService {
       );
     }
 
-    if (authDto?.password) {
-      updateData.password = await bcrypt.hash(authDto.password, 10);
-    }
-
-    if (authDto?.role && authDto.role !== user.role) {
-      updateData.role = authDto.role;
+    if (user.role === Role.ADMIN) {
+      if (authDto?.role && authDto.role !== user.role) {
+        updateData.role = authDto.role;
+      }
     }
 
     if (Object.keys(updateData).length === 0) {
       throw new BadRequestException('No fields provided for update');
     }
 
-    const updatedUser = await this.prisma.user.update({
+    await this.prisma.user.update({
       where: { id: user.id },
       data: updateData,
     });
@@ -438,12 +431,11 @@ export class UsersService {
 
     return {
       message: 'User details updated successfully',
-      user: updatedUser,
     };
   }
 
   async updateRecords(email: string, payload: Partial<UsersDto>) {
-    const user = await this.helpers.getUser(decodeURIComponent(email));
+    const user = await this.helpers.getUser(email);
 
     if (user.role === Role.STUDENT) {
       const student = await this.prisma.student.findUnique({
@@ -733,6 +725,13 @@ export class UsersService {
         },
       });
 
+      //update course rep role
+      await tx.user.update({
+        where: { id: student.userId },
+        data: {
+          role: Role.REP,
+        },
+      });
       return {
         rep,
         created: true,
@@ -823,7 +822,6 @@ export class UsersService {
     name: string,
     phone: string,
     secretCode: string,
-    adminNo?: string,
   ) {
     if (!email || !name || !phone) {
       throw new BadRequestException(
@@ -837,7 +835,7 @@ export class UsersService {
     });
 
     if (existingUser) {
-      throw new BadRequestException('User with this email already exists');
+      throw new ConflictException('User with this email already exists');
     }
 
     if (secretCode !== this.configService.get<string>('app.secretCode')) {
@@ -849,7 +847,7 @@ export class UsersService {
     const hashedPassword = await bcrypt.hash(randomPassword, 10);
 
     // Generate admin number if not provided
-    const generatedAdminNo = adminNo ?? `ADM-${Date.now()}`;
+    const generatedAdminNo = `ADM-${Date.now()}`;
 
     // Transaction: create user + admin profile
     const transaction = await this.prisma.$transaction(async (tx) => {
@@ -1019,5 +1017,24 @@ export class UsersService {
         thresholds: updatedThresholds,
       };
     }
+  }
+
+  async getUserByEmail(email: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      include: {
+        student: true,
+        lecturer: true,
+        staff: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    return {
+      user,
+    };
   }
 }

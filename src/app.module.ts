@@ -1,3 +1,4 @@
+import { JobsModule } from './jobs/jobs.module';
 import { AppController } from './app/app.controller';
 import { HealthModule } from './health/health.module';
 import { PayrollModule } from './payroll/payroll.module';
@@ -43,14 +44,17 @@ import { PayrollService } from './payroll/payroll.service';
 import { SystemService } from './app/app.service';
 import { TerminusModule } from '@nestjs/terminus';
 import { CacheInterceptor, CacheModule } from '@nestjs/cache-manager';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
+    JobsModule,
     CacheModule.register({
       ttl: 3600000,
       isGlobal: true,
     }),
     HealthModule,
+    ScheduleModule.forRoot(),
     TerminusModule,
     PayrollModule,
     AttendanceModule,

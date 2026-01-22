@@ -3,11 +3,9 @@ import {
   Get,
   Query,
   UploadedFile,
-  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { AttendanceService } from './attendance.service';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
 
 @Controller('attendance')
@@ -15,13 +13,11 @@ export class AttendanceController {
   constructor(private readonly attendance: AttendanceService) {}
 
   @Get('/mark')
-  // Don't cache POST requests - they modify data
-  @UseGuards(JwtAuthGuard)
   @UseInterceptors(FileInterceptor('face'))
   async markAttendance(
     @Query('source') source: string,
-    @Query('sesionId') sessionId: string,
-    @UploadedFile('face') face: Express.Multer.File,
+    @Query('sessionId') sessionId: string,
+    @UploadedFile() face: Express.Multer.File,
   ) {
     const response = await this.attendance.markAttendance(
       sessionId,
