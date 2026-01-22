@@ -29,6 +29,7 @@ model User {
   emailCodeCreatedAt       DateTime?     @map("email_code_created_at")
   phoneCodeCreatedAt       DateTime?     @map("phone_code_created_at")
   role                     Role
+  isPasswordChanged        Boolean       @default(false) @map("is_password_changed")
   password                 String
   isActive                 Boolean       @default(false) @map("is_active")
   student                  Student?
@@ -44,6 +45,13 @@ model User {
   staff                    Staff?
   admin                    Admin?
 
+  @@index([email, phone])
+  @@index([accountStatus])
+  @@index([role])
+  @@index([isActive])
+  @@index([createdAt])
+  @@index([lastLoginAt])
+  @@index([id])
   @@map("users")
 }
 
@@ -51,6 +59,8 @@ model Course {
   id          String             @id @default(cuid())
   code        String             @unique
   title       String
+  description String?
+  creditHours Int?               @default(0) @map("credit_hours")
   enrollments CourseEnrollment[]
   lecturers   CourseLecturer[]
   reps        CourseRep[]
@@ -72,6 +82,8 @@ model CourseEnrollment {
   enrolledAt DateTime @default(now())
 
   @@unique([studentId, courseId])
+  @@index([studentId])
+  @@index([courseId])
   @@map("course_enrollments")
 }
 
@@ -98,6 +110,8 @@ model CourseLecturer {
   assignedAt DateTime @default(now())
 
   @@unique([lecturerId, courseId])
+  @@index([lecturerId])
+  @@index([courseId])
   @@map("course_lecturers")
 }
 
@@ -106,8 +120,9 @@ model CourseRep {
   studentId String @map("student_id")
   courseId  String @map("course_id")
 
-  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  course  Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  student    Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  course     Course      @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  thresholds Thresholds?
 
   @@unique([studentId, courseId])
   @@map("course_reps")
@@ -124,6 +139,8 @@ model Student {
   updatedAt   DateTime           @updatedAt @map("updated_at")
   courseReps  CourseRep[]
 
+  @@index([userId])
+  @@index([studentId])
   @@map("students")
 }
 
@@ -133,12 +150,16 @@ model Lecturer {
   staffNo       String?          @unique
   recipientCode String?          @map("recipient_code")
   hourlyRate    Float            @default(0.0) @map("hourly_rate")
+  creditHours   Int              @default(0) @map("credit_hours")
   user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   courses       CourseLecturer[]
   createdAt     DateTime         @default(now()) @map("created_at")
   updatedAt     DateTime         @updatedAt @map("updated_at")
   sessions      Session[]
+  thresholds    Thresholds?
 
+  @@index([userId])
+  @@index([staffNo])
   @@map("lecturers")
 }
 
@@ -164,6 +185,16 @@ model Session {
   updatedAt       DateTime      @updatedAt @map("updated_at")
   attendances     Attendance[]
 
+  @@index([userId])
+  @@index([status])
+  @@index([token])
+  @@index([courseId])
+  @@index([lecturerId])
+  @@index([startTime])
+  @@index([endTime])
+  @@index([createdAt])
+  @@index([userId, status])
+  @@index([courseId, status])
   @@map("sessions")
 }
 
@@ -176,12 +207,20 @@ model Attendance {
   checkOutTime DateTime?        @map("check_out_time")
   confidence   Float?
   source       String? // kiosk, mobile, admin
-  status       AttendanceStatus @default(PRESENT)
+  status       AttendanceStatus @default(ABSENT)
 
   session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, userId])
+  @@index([sessionId])
+  @@index([userId])
+  @@index([status])
+  @@index([timestamp])
+  @@index([checkInTime])
+  @@index([checkOutTime])
+  @@index([sessionId, status])
+  @@index([userId, timestamp])
   @@map("attendances")
 }
 
@@ -191,6 +230,20 @@ model Kiosk {
   location String?
 
   @@map("kiosks")
+}
+
+model Thresholds {
+  id              String     @id @default(cuid())
+  lateThreshold   Int        @default(30) @map("late_threshold") // in minutes
+  absentThreshold Int        @default(60) @map("absent_threshold") // in minutes
+  createdAt       DateTime   @default(now()) @map("created_at")
+  lecturerId      String?    @unique @map("lecturer_id")
+  lecturer        Lecturer?  @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+  courseReps      CourseRep? @relation(fields: [courseRepId], references: [id])
+  courseRepId     String?    @unique @map("course_rep_id")
+
+  @@map("thresholds")
 }
 
 model Logs {
@@ -204,6 +257,11 @@ model Logs {
 
   user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([userId])
+  @@index([createdAt])
+  @@index([status])
+  @@index([priority])
+  @@index([userId, createdAt])
   @@map("logs")
 }
 
@@ -212,6 +270,7 @@ model SystemLogs {
   action    String
   status    NotificationStatus @default(UNREAD)
   ipAddress String?            @map("ip_address")
+  priority  Priority           @default(MEDIUM)
   createdAt DateTime           @default(now()) @map("created_at")
 
   @@map("system_logs")
@@ -237,6 +296,7 @@ enum Priority {
   LOW
   MEDIUM
   HIGH
+  CRITICAL
 }
 
 enum AttendanceStatus {
@@ -264,6 +324,7 @@ enum SessionMode {
 enum SessionStatus {
   OPEN
   CLOSED
+  SCHEDULED
 }
 
 enum AccountStatus {

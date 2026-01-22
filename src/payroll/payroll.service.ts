@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -10,7 +11,8 @@ import { TransferRecipientDto } from '../dto/transfer-recipient.dto';
 import { firstValueFrom } from 'rxjs';
 import { HttpService } from '@nestjs/axios';
 import { AxiosResponse } from 'axios';
-import { AttendanceStatus, Role } from '../../generated/prisma/enums';
+import { AttendanceStatus, Priority, Role } from '../../generated/prisma/enums';
+import { Cache } from '@nestjs/cache-manager';
 
 @Injectable()
 export class PayrollService {
@@ -19,6 +21,7 @@ export class PayrollService {
     private readonly prisma: PrismaService,
     private helper: HelpersService,
     private readonly httpService: HttpService,
+    @Inject('CACHE_MANAGER') private readonly cacheManager: Cache,
   ) {}
 
   async createTransferRecipient(
@@ -63,6 +66,25 @@ export class PayrollService {
       throw new UnauthorizedException('Access denied. Admins only.');
     }
 
+    const cacheKey = 'payroll:lecturers:earnings';
+
+    try {
+      const cached = await this.cacheManager.get(cacheKey);
+      if (cached) {
+        this.logger.log('Cache hit: lecturer earnings');
+        await this.helper.createSystemLog(
+          `Lecturer earnings viewed by ${user.name} on ${new Date().toISOString()}`,
+          Priority.CRITICAL,
+        );
+        return cached;
+      }
+    } catch (error) {
+      this.logger.warn(
+        'Cache read failed for lecturer earnings',
+        error.message,
+      );
+    }
+
     const lecturers = await this.prisma.lecturer.findMany({
       include: {
         user: {
@@ -86,11 +108,7 @@ export class PayrollService {
       },
     });
 
-    await this.helper.createSystemLog(
-      `Lecturer earnings viewed by ${user.name} on ${new Date().toISOString()}`,
-    );
-
-    return lecturers.map((lecturer) => {
+    const result = lecturers.map((lecturer) => {
       let totalHours = 0;
 
       for (const att of lecturer.user.attendances) {
@@ -103,6 +121,7 @@ export class PayrollService {
         totalHours += hours;
       }
       const earnings = totalHours * lecturer.hourlyRate;
+
       return {
         lecturerId: lecturer.id,
         name: lecturer.user.name,
@@ -113,5 +132,7 @@ export class PayrollService {
         earnings: Number(earnings.toFixed(2)),
       };
     });
+
+    return { result };
   }
 }

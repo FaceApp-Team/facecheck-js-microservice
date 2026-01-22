@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Patch,
   Post,
@@ -15,21 +16,29 @@ import { UsersDto } from '../dto/users.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Request } from 'express';
+import { Roles } from '../decorators/roles.decorator';
+import { Role } from '../../generated/prisma/enums';
+import { RolesGuard } from '../guards/roles.guard';
 
 @Controller('users')
 export class UsersController {
   constructor(private readonly users: UsersService) {}
 
   @Post('/enroll')
-  @UseInterceptors(FileInterceptor('image'))
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.STUDENT)
+  @UseInterceptors(FileInterceptor('face'))
   async enrollUser(
     @Body() payload: Partial<UsersDto>,
-    @UploadedFile('image') image: Express.Multer.File,
+    @UploadedFile() image: Express.Multer.File,
+    @Req() req: Request,
   ) {
-    const response = await this.users.enrollUser(payload, image);
+    const email = (req.user as any)?.email;
+    const response = await this.users.enrollUser(payload, image, email);
     return response;
   }
 
+  @UseGuards(JwtAuthGuard)
   @Get('/job-status')
   async getJobStatus(@Query('jobId') jobId: string) {
     const response = await this.users.getJobStatus(jobId);
@@ -37,37 +46,38 @@ export class UsersController {
   }
 
   @Patch('/update')
-  @UseGuards(JwtAuthGuard)
+  @Roles(
+    Role.ADMIN,
+    Role.SYSTEM_ADMIN,
+    Role.STUDENT,
+    Role.LECTURER,
+    Role.REP,
+    Role.STAFF,
+  )
+  @UseGuards(JwtAuthGuard, RolesGuard)
   async updateUserDetails(
     @Body() authDto: Partial<UsersDto>,
     @Req() req: Request,
-    @Query('mail') mail?: string,
   ) {
-    const email = (req.user as any)?.email
-      ? (req.user as any)?.email
-      : encodeURIComponent(mail ?? '');
+    const email = (req.user as any)?.email;
 
     const response = await this.users.updateUserDetails(email, authDto);
     return response;
   }
 
   @Patch('/update-records')
-  @UseGuards(JwtAuthGuard)
-  async updateRecords(
-    @Body() paylod: Partial<UsersDto>,
-    @Query('mail') mail: string,
-    @Req() req: Request,
-  ) {
-    const email = (req.user as any)?.email
-      ? (req.user as any)?.email
-      : encodeURIComponent(mail ?? '');
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.STUDENT)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async updateRecords(@Body() paylod: Partial<UsersDto>, @Req() req: Request) {
+    const email = (req.user as any)?.email;
 
     const response = await this.users.updateRecords(email, paylod);
     return response;
   }
 
-  @UseGuards(JwtAuthGuard)
-  @Get('/remove')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Delete('/remove')
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
   async removeUser(@Query('email') email: string) {
     const response = await this.users.removeUser(email);
     return response;
@@ -80,38 +90,97 @@ export class UsersController {
     return response;
   }
 
-  @Post('/assign-rep')
-  @UseGuards(JwtAuthGuard)
+  @Get('/assign-rep')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER)
   async assignRep(
     @Query('courseId') courseId: string,
     @Query('studentId') studentId: string,
-    @Query('mail') mail: string,
     @Req() req: Request,
   ) {
-    const email = (req.user as any)?.email
-      ? (req.user as any)?.email
-      : encodeURIComponent(mail ?? '');
+    const email = (req.user as any)?.email;
+
     const response = await this.users.assignRep(courseId, studentId, email);
     return response;
   }
 
+  @Post('/create-admin')
   async createAdmin(
     @Body()
     payload: {
       email: string;
       name: string;
       phone: string;
-      adminNo?: string;
     },
-    @Query('secret-code') secretCode: string,
+    @Query('secretCode') secretCode: string,
   ) {
     const response = await this.users.createAdmin(
       payload.email,
       payload.name,
       payload.phone,
       secretCode,
-      payload.adminNo,
     );
+    return response;
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER)
+  @Delete('remove/rep')
+  async removeCourseRep(
+    @Query('courseId') courseId: string,
+    @Query('studentId') studentId: string,
+    @Req() req: Request,
+  ) {
+    const email = (req.user as any)?.email;
+    const response = await this.users.removeCourseRep(
+      courseId,
+      studentId,
+      email,
+    );
+    return response;
+  }
+
+  @Get('/fetch-students')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    Role.ADMIN,
+    Role.SYSTEM_ADMIN,
+    Role.LECTURER,
+    Role.REP,
+    Role.STAFF,
+    Role.STUDENT,
+  )
+  async fetchStudents(@Req() req: Request) {
+    const email = (req.user as any)?.email;
+    const response = await this.users.fetchStudents(email);
+    return response;
+  }
+
+  @Post('/update-thresholds')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.LECTURER, Role.REP)
+  async updateThresholds(
+    @Req() req: Request,
+    @Body() thresholds: { lateThreshold: number; absentThreshold: number },
+  ) {
+    const email = (req.user as any)?.email;
+    const response = await this.users.updateThresholds(email, thresholds);
+    return response;
+  }
+
+  @Get('/by-email')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    Role.ADMIN,
+    Role.SYSTEM_ADMIN,
+    Role.LECTURER,
+    Role.REP,
+    Role.STAFF,
+    Role.STUDENT,
+  )
+  async getUserByEmail(@Req() req: Request) {
+    const email = (req.user as any)?.email;
+    const response = await this.users.getUserByEmail(email);
     return response;
   }
 }

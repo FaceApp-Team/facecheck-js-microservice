@@ -13,40 +13,43 @@ import { SessionsService } from './sessions.service';
 import { SessionsDto } from '../dto/sessions.dto';
 import { Request } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { Roles } from '../decorators/roles.decorator';
+import { Role } from '../../generated/prisma/enums';
+import { RolesGuard } from '../guards/roles.guard';
 
 @Controller('sessions')
 export class SessionsController {
   constructor(private readonly sessions: SessionsService) {}
 
   @Post('/create')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.LECTURER, Role.REP)
   async createSession(
     @Body() payload: Partial<SessionsDto>,
-    @Query('mail') mail: string,
+
     @Req() req: Request,
   ) {
-    const email = (req.user as any)?.email
-      ? (req.user as any)?.email
-      : encodeURIComponent(mail ?? '');
+    const email = (req.user as any)?.email;
+
     const response = await this.sessions.createSession(payload, email);
     return response;
   }
 
   @Get('/close')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.LECTURER, Role.REP)
   async closeSession(
     @Query('sessionId') sessionId: string,
-    @Query('mail') mail: string,
+
     @Req() req: Request,
   ) {
-    const email = (req.user as any)?.email
-      ? (req.user as any)?.email
-      : encodeURIComponent(mail ?? '');
+    const email = (req.user as any)?.email;
     const response = await this.sessions.closeSession(sessionId, email);
     return response;
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
   @Post('admin/all-sessions')
   async getAllSessionsAdmin(@Req() req: Request) {
     const email = (req.user as any)?.email;
@@ -55,16 +58,12 @@ export class SessionsController {
   }
 
   @Get('creator-sessions')
-  @UseGuards(JwtAuthGuard)
-  async getSessionsCreatorSessions(
-    @Query('mail') mail: string,
-    @Req() req: Request,
-  ) {
-    const email = (req.user as any)?.email
-      ? (req.user as any)?.email
-      : encodeURIComponent(mail ?? '');
-    const creatorId = email;
-    const response = await this.sessions.getSessionCreatorSessions(creatorId);
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER, Role.REP)
+  async getSessionsCreatorSessions(@Req() req: Request) {
+    const email = (req.user as any)?.email;
+
+    const response = await this.sessions.getSessionCreatorSessions(email);
     return response;
   }
 
@@ -106,6 +105,30 @@ export class SessionsController {
       payload,
       email,
     );
+    return response;
+  }
+
+  @Get('/approve')
+  @UseGuards(JwtAuthGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
+  async approveSession(
+    @Query('sessionId') sessionId: string,
+    @Req() req: Request,
+  ) {
+    const email = (req.user as any)?.email;
+    const response = await this.sessions.approveSession(sessionId, email);
+    return response;
+  }
+
+  @Get('/disprove')
+  @UseGuards(JwtAuthGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
+  async disproveSession(
+    @Query('sessionId') sessionId: string,
+    @Req() req: Request,
+  ) {
+    const email = (req.user as any)?.email;
+    const response = await this.sessions.disproveSession(sessionId, email);
     return response;
   }
 }

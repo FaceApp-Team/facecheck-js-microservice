@@ -3,9 +3,11 @@ import { Job } from 'bullmq';
 import { HelpersService } from '../helpers/helpers.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ImageStatus } from '../../generated/prisma/enums';
+import { Logger } from '@nestjs/common';
 
 @Processor('image')
 export class ImageConsumer extends WorkerHost {
+  logger = new Logger(ImageConsumer.name);
   constructor(
     private readonly helpers: HelpersService,
     private readonly prisma: PrismaService,
@@ -15,34 +17,40 @@ export class ImageConsumer extends WorkerHost {
 
   async process(job: Job): Promise<any> {
     try {
-      if (job.name === 'process-image') {
-        const { imageUrl, userId } = job.data;
+      this.logger.log(`Processing image job: ${job.name}`);
 
-        await this.prisma.user.update({
-          where: {
-            id: userId,
-          },
-          data: {
-            imageStatus: ImageStatus.PROCESSING,
-            embeddingStatus: ImageStatus.PROCESSING,
-          },
-        });
+      const { imageUrl, userId } = job.data;
 
-        await this.helpers.getFaceEmbedding();
-
-        await this.prisma.user.update({
-          where: {
-            id: userId,
-          },
-          data: {
-            faceEmbedding: '',
-            embeddingStatus: ImageStatus.UPLOADED,
-          },
-        });
-
-        return { imageUrl: imageUrl, embedding: '' };
+      if (!imageUrl || !userId) {
+        throw new Error('Missing imageUrl or userId in job data');
       }
+
+      await this.prisma.user.update({
+        where: {
+          id: userId,
+        },
+        data: {
+          imageStatus: ImageStatus.PROCESSING,
+          embeddingStatus: ImageStatus.PROCESSING,
+        },
+      });
+
+      const result = await this.helpers.enrollFace(userId, imageUrl);
+
+      this.logger.log(`Image processed for user ${userId}`);
+      await this.prisma.user.update({
+        where: {
+          id: userId,
+        },
+        data: {
+          faceEmbedding: '',
+          embeddingStatus: ImageStatus.UPLOADED,
+        },
+      });
+
+      return { imageUrl: imageUrl, status: result.status };
     } catch (error) {
+      this.logger.error(`Image processing failed: ${error.message}`);
       await this.prisma.user.update({
         where: {
           id: job.data.userId,

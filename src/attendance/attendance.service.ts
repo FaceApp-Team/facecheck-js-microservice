@@ -1,5 +1,6 @@
 import {
   ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -7,15 +8,19 @@ import { PrismaService } from '../prisma/prisma.service';
 import { HelpersService } from '../helpers/helpers.service';
 import {
   AttendanceStatus,
+  Priority,
   SessionMode,
   SessionStatus,
 } from '../../generated/prisma/enums';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
 
 @Injectable()
 export class AttendanceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly helper: HelpersService,
+    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
 
   async markAttendance(
@@ -23,37 +28,83 @@ export class AttendanceService {
     face: Express.Multer.File,
     source: string,
   ) {
-    const session = await this.prisma.session.findUnique({
-      where: { id: sessionId },
-      select: {
-        id: true,
-        startTime: true,
-        endTime: true,
-        lateThreshold: true,
-        absentThreshold: true,
-        mode: true,
-        status: true,
-        courseId: true,
-        createdBy: { select: { id: true } },
-      },
-    });
+    const cacheKey = `session:${sessionId}:active`;
+    let session: any;
 
-    if (!session) {
-      throw new NotFoundException('Session not found');
+    try {
+      const cached = await this.cacheManager.get(cacheKey);
+      if (cached) {
+        session = cached;
+      }
+    } catch (error) {
+      this.helper.logger.warn(
+        `Cache read failed for session ${sessionId}`,
+        error.message,
+      );
     }
 
-    if (session.status === SessionStatus.CLOSED) {
-      throw new ForbiddenException('Session is closed');
+    if (!session) {
+      session = await this.prisma.session.findUnique({
+        where: { id: sessionId },
+        select: {
+          id: true,
+          startTime: true,
+          endTime: true,
+          lateThreshold: true,
+          absentThreshold: true,
+          mode: true,
+          status: true,
+          courseId: true,
+          createdBy: { select: { id: true } },
+        },
+      });
+
+      if (!session) {
+        throw new NotFoundException('Session not found');
+      }
+
+      // Cache active sessions for 2 minutes only (they change frequently)
+      try {
+        await this.cacheManager.set(cacheKey, session, 120000);
+      } catch (error) {
+        this.helper.logger.warn(
+          `Cache write failed for session ${sessionId}`,
+          error.message,
+        );
+      }
+    }
+
+    if (session.status !== SessionStatus.OPEN) {
+      throw new ForbiddenException('Session is not open for attendance');
     }
 
     this.helper.checkFileSize(face);
 
-    this.helper.checkMediaType(face, [
-      'image/jpeg',
-      'image/png',
-      'image/jpg',
-      'image/webp',
-    ]);
+    this.helper.checkMediaType(face, ['image/jpeg', 'image/png', 'image/jpg']);
+
+    const today = new Date();
+    const sessionDate = new Date(session.startTime);
+
+    if (
+      today.getFullYear() !== sessionDate.getFullYear() ||
+      today.getMonth() !== sessionDate.getMonth() ||
+      today.getDate() !== sessionDate.getDate()
+    ) {
+      throw new ForbiddenException('Session is not active today');
+    }
+
+    //check if attendance marking is within allowed time window
+
+    if (today < session.startTime) {
+      throw new ForbiddenException('Session has not started yet');
+    }
+
+    //upload face image to cloud storage
+    const imageUrl = await this.helper.uploadImage(
+      face.buffer,
+      face.originalname,
+      face.mimetype,
+    );
 
     const sessionStartTime = session.startTime;
     const absentThreshold = session.absentThreshold;
@@ -61,13 +112,7 @@ export class AttendanceService {
     const sessionEndTime = session.endTime;
     const currentTime = new Date();
 
-    const creator = await this.prisma.user.findUnique({
-      where: {
-        id: session.createdBy.id,
-      },
-    });
-
-    if (!creator) {
+    if (!session.createdBy) {
       throw new NotFoundException('Session creator not found');
     }
 
@@ -91,22 +136,25 @@ export class AttendanceService {
     */
 
     //mock request to python microservice
-    const getRecognition = this.helper.compareFaceEmbeddings();
+    const getRecognition = await this.helper.recognizeFace(imageUrl.imageUrl);
 
-    if (getRecognition.confidence < 0.6) {
+    if (getRecognition.match === false) {
+      throw new NotFoundException('Face mismatch: No matching face found');
+    }
+    if (getRecognition.score < 0.6) {
       throw new ForbiddenException('Face recognition confidence too low');
     }
 
     const user = await this.prisma.user.findUnique({
-      where: { id: getRecognition.userId },
-      include: { student: true, lecturer: true },
+      where: { id: getRecognition.user_id },
+      include: { student: { include: { enrollments: true } }, lecturer: true },
     });
 
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
-    if (session.createdBy.id === getRecognition.userId) {
+    if (session.createdBy.id === getRecognition.user_id) {
       throw new ForbiddenException('Session creator cannot mark attendance');
     }
 
@@ -115,16 +163,11 @@ export class AttendanceService {
     }
 
     if (user.student) {
-      const enrollment = await this.prisma.courseEnrollment.findUnique({
-        where: {
-          studentId_courseId: {
-            studentId: user.student.id,
-            courseId: session.courseId!,
-          },
-        },
-      });
-
-      if (!enrollment) {
+      if (
+        !user.student.enrollments.some(
+          (enr) => enr.courseId === session.courseId,
+        )
+      ) {
         throw new ForbiddenException('User not enrolled for this course');
       }
     }
@@ -191,18 +234,20 @@ export class AttendanceService {
       await this.helper.createUserLog(
         user.email,
         `You checked in to session ${session.id} at ${new Date().toISOString()}`,
+        Priority.MEDIUM,
       );
 
       await this.helper.createSystemLog(
         `User ${user.email} checked in to session ${session.id} at ${new Date().toISOString()}`,
+        Priority.MEDIUM,
       );
 
-      return attendance;
+      return { attendance: attendance, score: getRecognition.score };
     } else if (session.mode === SessionMode.CHECK_OUT) {
       const existing = await this.prisma.attendance.findUnique({
         where: {
           sessionId_userId: {
-            sessionId: session.id,
+            sessionId: sessionId,
             userId: user.id,
           },
         },
@@ -244,10 +289,12 @@ export class AttendanceService {
       await this.helper.createUserLog(
         user.email,
         `You checked out of session ${session.id} at ${new Date().toISOString()}`,
+        Priority.MEDIUM,
       );
 
       await this.helper.createSystemLog(
         `User ${user.email} checked out of session ${session.id} at ${new Date().toISOString()}`,
+        Priority.MEDIUM,
       );
       return attendance;
     }

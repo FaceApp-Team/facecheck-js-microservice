@@ -3,6 +3,7 @@ import { INestApplication } from '@nestjs/common';
 import * as request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
+import { NestExpressApplication } from '@nestjs/platform-express';
 
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;
@@ -12,7 +13,7 @@ describe('AppController (e2e)', () => {
       imports: [AppModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication();
+    app = moduleFixture.createNestApplication<NestExpressApplication>();
     await app.init();
   });
 
