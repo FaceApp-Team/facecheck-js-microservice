@@ -299,4 +299,87 @@ export class AttendanceService {
       return attendance;
     }
   }
+
+  async getUserAttendance(email: string) {
+    const user = await this.helper.getUser(email);
+
+    const attendance = await this.prisma.attendance.findMany({
+      where: { userId: user.id },
+      include: {
+        session: {
+          include: {
+            course: true,
+            createdBy: { select: { id: true, email: true, name: true } },
+          },
+        },
+      },
+      orderBy: { checkInTime: 'desc' },
+    });
+
+    return attendance;
+  }
+
+  async getAllAttendance(email: string) {
+    const user = await this.helper.getUser(email);
+
+    if (user.role !== 'ADMIN' && user.role !== 'SYSTEM_ADMIN') {
+      throw new ForbiddenException('Access denied. Admins only.');
+    }
+
+    const attendance = await this.prisma.attendance.findMany({
+      include: {
+        user: { select: { id: true, email: true, name: true } },
+        session: {
+          include: {
+            course: true,
+            createdBy: { select: { id: true, email: true, name: true } },
+          },
+        },
+      },
+      orderBy: { checkInTime: 'desc' },
+    });
+
+    return attendance;
+  }
+
+  async deleteUserAttendance(attendanceId: string, email: string) {
+    const user = await this.helper.getUser(email);
+
+    const attendance = await this.prisma.attendance.findUnique({
+      where: { id: attendanceId },
+    });
+
+    if (!attendance) {
+      throw new NotFoundException('Attendance record not found');
+    }
+
+    if (user.role !== 'ADMIN' && user.role !== 'SYSTEM_ADMIN') {
+      if (attendance.userId !== user.id) {
+        throw new ForbiddenException(
+          'You can only delete your own attendance records',
+        );
+      }
+    }
+
+    await this.prisma.attendance.delete({
+      where: { id: attendanceId },
+    });
+
+    if (!user.email) {
+      throw new NotFoundException('User email not found');
+    }
+
+    await this.helper.createUserLog(
+      user.email,
+      `You deleted attendance record ${attendanceId} at ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+
+    await this.helper.createSystemLog(
+      `User ${user.email} deleted attendance record ${attendanceId} at ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+
+    return { message: 'Attendance record deleted successfully' };
+  }
 }
