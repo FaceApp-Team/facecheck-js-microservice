@@ -91,7 +91,7 @@ import { ScheduleModule } from '@nestjs/schedule';
           from: '"College of Medicine and Allied Sciences" <info@comas.edu.gh>',
         },
         template: {
-          dir: join(__dirname, '..', 'views'),
+          dir: join(__dirname, '..', '..', 'views'),
           adapter: new EjsAdapter(),
         },
       }),
