@@ -60,6 +60,10 @@ export class AuthService {
       );
     }
 
+    if (payload.role && payload.role !== Role.STUDENT) {
+      throw new ForbiddenException('Invalid role for self-registration');
+    }
+
     // hash password
     const hash = await bcrypt.hash(payload.password, 10);
 
