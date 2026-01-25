@@ -19,6 +19,8 @@ export class SystemService {
       throw new Error('Application instance not found');
     }
 
+    //check if app is already closing
+
     await app.close();
   }
 }
