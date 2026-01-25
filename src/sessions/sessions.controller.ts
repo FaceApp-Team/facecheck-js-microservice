@@ -26,7 +26,6 @@ export class SessionsController {
   @Roles(Role.ADMIN, Role.LECTURER, Role.REP)
   async createSession(
     @Body() payload: Partial<SessionsDto>,
-
     @Req() req: Request,
   ) {
     const email = (req.user as any)?.email;
@@ -50,7 +49,7 @@ export class SessionsController {
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
-  @Post('admin/all-sessions')
+  @Get('admin/all-sessions')
   async getAllSessionsAdmin(@Req() req: Request) {
     const email = (req.user as any)?.email;
     const response = await this.sessions.getAllSessionsAdmin(email);

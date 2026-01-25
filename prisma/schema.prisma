@@ -240,7 +240,7 @@ model Thresholds {
   lecturerId      String?    @unique @map("lecturer_id")
   lecturer        Lecturer?  @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
   updatedAt       DateTime   @updatedAt @map("updated_at")
-  courseReps      CourseRep? @relation(fields: [courseRepId], references: [id])
+  courseReps      CourseRep? @relation(fields: [courseRepId], references: [id], onDelete: Cascade)
   courseRepId     String?    @unique @map("course_rep_id")
 
   @@map("thresholds")
