@@ -280,4 +280,15 @@ export class CoursesService {
       message: 'Course removed from student successfully',
     };
   }
+
+  async getStudentCourses(id: string) {
+    const enrollments = await this.prisma.courseEnrollment.findMany({
+      where: { student: { user: { id: id } } },
+      include: { course: true },
+    });
+
+    const courses = enrollments.map((enrollment) => enrollment.course);
+
+    return { success: true, data: courses };
+  }
 }

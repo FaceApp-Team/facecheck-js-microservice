@@ -21,6 +21,11 @@ export class UsersDto {
   @ApiProperty({ example: 'John Doe' })
   fullName: string;
 
+  @IsString()
+  @IsOptional()
+  @ApiProperty({ required: false, example: 'http://example.com/profile.jpg' })
+  profilePicture: string;
+
   @IsNumber()
   @IsOptional()
   @ApiProperty({ example: 50 })

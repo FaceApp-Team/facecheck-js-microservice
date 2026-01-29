@@ -24,7 +24,7 @@ export class AuthDto {
   @IsString()
   @IsNotEmpty()
   @MinLength(6)
-  @MaxLength(10)
+  @MaxLength(15)
   @ApiProperty({ example: 'secureP@ss' })
   password: string;
 

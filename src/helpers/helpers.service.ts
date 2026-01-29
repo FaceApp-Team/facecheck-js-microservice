@@ -55,6 +55,7 @@ export class HelpersService {
         phoneVerificationRetries: true,
         phoneCodeCreatedAt: true,
         isActive: true,
+        profilePicture: true,
         createdAt: true,
       },
     });
@@ -342,6 +343,18 @@ export class HelpersService {
         `Image upload failed: ${error.message}`,
       );
     }
+  }
+
+  async uploadImages(
+    buffer: Buffer<ArrayBufferLike>[],
+    originalname: string,
+    mimetype: string,
+  ) {
+    const uploadPromises = buffer.map((buf) =>
+      this.uploadImage(buf, originalname, mimetype),
+    );
+
+    return Promise.all(uploadPromises);
   }
 
   generateRandomCode(length: number) {

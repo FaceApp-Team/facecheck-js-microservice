@@ -55,13 +55,15 @@ export class UsersController {
     Role.STAFF,
   )
   @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseInterceptors(FileInterceptor('profilePicture'))
   async updateUserDetails(
     @Body() authDto: Partial<UsersDto>,
     @Req() req: Request,
+    @UploadedFile() image: Express.Multer.File,
   ) {
     const email = (req.user as any)?.email;
 
-    const response = await this.users.updateUserDetails(email, authDto);
+    const response = await this.users.updateUserDetails(email, image, authDto);
     return response;
   }
 

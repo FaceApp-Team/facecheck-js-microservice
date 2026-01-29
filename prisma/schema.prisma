@@ -33,6 +33,7 @@ model User {
   password                 String
   isActive                 Boolean       @default(false) @map("is_active")
   student                  Student?
+  profilePicture           String?       @map("profile_picture")
   lecturer                 Lecturer?
   createdAt                DateTime      @default(now()) @map("created_at")
   updatedAt                DateTime      @updatedAt @map("updated_at")
@@ -309,6 +310,7 @@ enum AttendanceStatus {
 
 enum Role {
   ADMIN
+  OWNER
   SYSTEM_ADMIN
   LECTURER
   STAFF

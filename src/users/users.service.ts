@@ -383,7 +383,11 @@ export class UsersService {
     return { state: status.state, status: status.values };
   }
 
-  async updateUserDetails(email: string, authDto?: Partial<AuthDto>) {
+  async updateUserDetails(
+    email: string,
+    image?: Express.Multer.File,
+    authDto?: Partial<AuthDto>,
+  ) {
     const user = await this.helpers.getUser(email);
 
     const updateData: any = {};
@@ -401,6 +405,21 @@ export class UsersService {
       throw new BadRequestException(
         'Email change is not allowed via this endpoint',
       );
+    }
+
+    if (image) {
+      if (image.buffer && image.buffer !== null) {
+        const url = await this.helpers.uploadImage(
+          image.buffer,
+          image.originalname,
+          image.mimetype,
+        );
+
+        if (!url) {
+          throw new BadRequestException('Image upload failed');
+        }
+        updateData.profilePicture = url.imageUrl;
+      }
     }
 
     if (user.role === Role.ADMIN) {

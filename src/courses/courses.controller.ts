@@ -76,4 +76,13 @@ export class CoursesController {
     );
     return response;
   }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER, Role.STUDENT, Role.REP)
+  @Get('/student-courses')
+  async getStudentCourses(@Req() req: Request) {
+    const id = (req.user as any)?.id;
+    const response = await this.courses.getStudentCourses(id);
+    return response;
+  }
 }
