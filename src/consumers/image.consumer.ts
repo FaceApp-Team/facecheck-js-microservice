@@ -19,9 +19,9 @@ export class ImageConsumer extends WorkerHost {
     try {
       this.logger.log(`Processing image job: ${job.name}`);
 
-      const { imageUrl, userId } = job.data;
+      const { imageUrls, userId } = job.data;
 
-      if (!imageUrl || !userId) {
+      if (!imageUrls || imageUrls.length === 0 || !userId) {
         throw new Error('Missing imageUrl or userId in job data');
       }
 
@@ -35,7 +35,7 @@ export class ImageConsumer extends WorkerHost {
         },
       });
 
-      const result = await this.helpers.enrollFace(userId, imageUrl);
+      const result = await this.helpers.enrollFace(userId, imageUrls);
 
       this.logger.log(`Image processed for user ${userId}`);
       await this.prisma.user.update({
@@ -48,7 +48,7 @@ export class ImageConsumer extends WorkerHost {
         },
       });
 
-      return { imageUrl: imageUrl, status: result.status };
+      return { imageUrls: imageUrls, status: result.status };
     } catch (error) {
       this.logger.error(`Image processing failed: ${error.message}`);
       await this.prisma.user.update({

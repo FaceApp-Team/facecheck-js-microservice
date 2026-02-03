@@ -1,18 +1,12 @@
-import {
-  BadRequestException,
-  Inject,
-  Injectable,
-  Logger,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { HelpersService } from '../helpers/helpers.service';
 import { TransferRecipientDto } from '../dto/transfer-recipient.dto';
 import { firstValueFrom } from 'rxjs';
 import { HttpService } from '@nestjs/axios';
 import { AxiosResponse } from 'axios';
-import { AttendanceStatus, Priority, Role } from '../../generated/prisma/enums';
-import { Cache } from '@nestjs/cache-manager';
+import { LecturerEarning } from '../types/lecturer.types';
+// import { AttendanceStatus, Role } from '../../generated/prisma/enums';
 
 @Injectable()
 export class PayrollService {
@@ -21,7 +15,6 @@ export class PayrollService {
     private readonly prisma: PrismaService,
     private helper: HelpersService,
     private readonly httpService: HttpService,
-    @Inject('CACHE_MANAGER') private readonly cacheManager: Cache,
   ) {}
 
   async createTransferRecipient(
@@ -59,80 +52,63 @@ export class PayrollService {
     }
   }
 
-  async getLecturersEarnings(email: string) {
-    const user = await this.helper.getUser(email);
+  // Backend: src/payroll/payroll.service.ts
 
-    if (user.role !== Role.ADMIN && user.role !== Role.SYSTEM_ADMIN) {
-      throw new UnauthorizedException('Access denied. Admins only.');
-    }
-
-    const cacheKey = 'payroll:lecturers:earnings';
-
-    try {
-      const cached = await this.cacheManager.get(cacheKey);
-      if (cached) {
-        this.logger.log('Cache hit: lecturer earnings');
-        await this.helper.createSystemLog(
-          `Lecturer earnings viewed by ${user.name} on ${new Date().toISOString()}`,
-          Priority.CRITICAL,
-        );
-        return cached;
-      }
-    } catch (error) {
-      this.logger.warn(
-        'Cache read failed for lecturer earnings',
-        error.message,
-      );
-    }
-
+  async getLecturerEarnings(): Promise<LecturerEarning[]> {
+    // Get all lecturers with their user info
     const lecturers = await this.prisma.lecturer.findMany({
       include: {
         user: {
-          select: { id: true, email: true, name: true },
-          include: {
-            attendances: {
-              where: {
-                status: AttendanceStatus.PRESENT,
-                checkInTime: { not: null },
-                checkOutTime: { not: null },
-                session: {
-                  lecturerId: { not: null },
-                },
-              },
-              include: {
-                session: true,
-              },
-            },
+          select: {
+            id: true,
+            name: true,
+            email: true,
           },
         },
       },
     });
 
-    const result = lecturers.map((lecturer) => {
+    const result: LecturerEarning[] = [];
+
+    for (const lecturer of lecturers) {
+      // Get attendance records FOR the lecturer's user (where they attended sessions)
+      const attendances = await this.prisma.attendance.findMany({
+        where: {
+          userId: lecturer.userId, // Lecturer's user ID for attendance
+          checkOutTime: { not: null }, // Only completed attendances
+        },
+        select: {
+          checkInTime: true,
+          checkOutTime: true,
+        },
+      });
+
+      // Calculate total hours from their attendance
       let totalHours = 0;
-
-      for (const att of lecturer.user.attendances) {
-        if (att.session.lecturerId !== lecturer.id) continue;
-
-        const hours =
-          (att.checkOutTime!.getTime() - att.checkInTime!.getTime()) /
-          (1000 * 60 * 60);
-
-        totalHours += hours;
+      for (const attendance of attendances) {
+        if (attendance.checkInTime && attendance.checkOutTime) {
+          const checkIn = new Date(attendance.checkInTime);
+          const checkOut = new Date(attendance.checkOutTime);
+          const hours =
+            (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
+          totalHours += hours;
+        }
       }
-      const earnings = totalHours * lecturer.hourlyRate;
 
-      return {
+      const hourlyRate = lecturer.hourlyRate ?? 0;
+      const earnings = totalHours * hourlyRate;
+
+      result.push({
         lecturerId: lecturer.id,
         name: lecturer.user.name,
         email: lecturer.user.email,
-        staffNo: lecturer.staffNo,
-        hourlyRate: lecturer.hourlyRate,
-        totalHours: Number(totalHours.toFixed(2)),
-        earnings: Number(earnings.toFixed(2)),
-      };
-    });
+        staffNo: lecturer.staffNo, // Now correctly from Lecturer model
+        hourlyRate,
+        totalHours: Math.round(totalHours * 100) / 100,
+        earnings: Math.round(earnings * 100) / 100,
+      });
+    }
 
-    return { result };
+    return result;
   }
 }

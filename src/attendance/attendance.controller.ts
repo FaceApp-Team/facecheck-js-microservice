@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Post,
   Query,
   Req,
   UploadedFile,
@@ -14,12 +15,14 @@ import { Request } from 'express';
 import { RolesGuard } from '../guards/roles.guard';
 import { Roles } from '../decorators/roles.decorator';
 import { Role } from '../../generated/prisma/enums';
+import { SkipThrottle } from '@nestjs/throttler';
 
+@SkipThrottle()
 @Controller('attendance')
 export class AttendanceController {
   constructor(private readonly attendance: AttendanceService) {}
 
-  @Get('/mark')
+  @Post('/mark')
   @UseInterceptors(FileInterceptor('face'))
   async markAttendance(
     @Query('source') source: string,
@@ -35,7 +38,15 @@ export class AttendanceController {
   }
 
   @Get('/user-attendance')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    Role.ADMIN,
+    Role.SYSTEM_ADMIN,
+    Role.STUDENT,
+    Role.REP,
+    Role.STAFF,
+    Role.LECTURER,
+  )
   async getUserAttendane(@Req() req: Request) {
     const email = (req.user as any)?.email;
     const response = await this.attendance.getUserAttendance(email);
@@ -43,8 +54,15 @@ export class AttendanceController {
   }
 
   @Get('/all-attendances')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
+  @UseGuards(JwtAuthGuard)
+  @Roles(
+    Role.ADMIN,
+    Role.SYSTEM_ADMIN,
+    Role.LECTURER,
+    Role.STAFF,
+    Role.REP,
+    Role.STUDENT,
+  )
   async getAllAttendances(@Req() req: Request) {
     const email = (req.user as any)?.email;
     const response = await this.attendance.getAllAttendance(email);

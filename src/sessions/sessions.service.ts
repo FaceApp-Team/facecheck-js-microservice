@@ -1,7 +1,6 @@
 import {
   BadRequestException,
   ForbiddenException,
-  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -15,8 +14,6 @@ import {
   SessionMode,
   SessionStatus,
 } from '../../generated/prisma/enums';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { Cache } from 'cache-manager';
 
 @Injectable()
 export class SessionsService {
@@ -25,7 +22,6 @@ export class SessionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly helpers: HelpersService,
-    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
 
   async createSession(payload: Partial<SessionsDto>, email: string) {
@@ -324,16 +320,6 @@ export class SessionsService {
       Priority.MEDIUM,
     );
 
-    // Invalidate session caches after closing
-    try {
-      await Promise.all([
-        this.cacheManager.del(`session:${sessionId}:active`),
-        this.cacheManager.del(`sessions:user:${user.id}`),
-      ]);
-    } catch (error) {
-      this.logger.warn('Failed to invalidate session caches', error.message);
-    }
-
     await this.helpers.createSystemLog(
       `Session ${session.name} closed by ${user.name} on ${new Date().toISOString()}`,
       Priority.MEDIUM,
@@ -344,45 +330,65 @@ export class SessionsService {
   async getAllSessionsAdmin(email: string) {
     const user = await this.helpers.getUser(email);
 
-    if (user.role !== Role.ADMIN && user.role !== Role.SYSTEM_ADMIN) {
+    if (
+      user.role !== Role.ADMIN &&
+      user.role !== Role.SYSTEM_ADMIN &&
+      user.role !== Role.STUDENT &&
+      user.role !== Role.REP &&
+      user.role !== Role.STAFF &&
+      user.role !== Role.LECTURER
+    ) {
       throw new ForbiddenException('Access denied. Admins only.');
     }
 
-    const cacheKey = 'sessions:admin:all';
-    let sessions;
-
-    try {
-      const cached = await this.cacheManager.get(cacheKey);
-      if (cached) {
-        this.logger.log('Cache hit: all admin sessions');
-        sessions = cached;
-      }
-    } catch (error) {
-      this.logger.warn('Cache read failed for admin sessions', error.message);
-    }
-
-    if (!sessions) {
-      sessions = await this.prisma.session.findMany({
-        include: {
-          createdBy: true,
-          lecturer: true,
-          course: true,
-          attendances: true,
+    const sessions = await this.prisma.session.findMany({
+      include: {
+        createdBy: true,
+        lecturer: true,
+        course: {
+          include: {
+            _count: {
+              select: { enrollments: true },
+            },
+            enrollments: {
+              include: {
+                student: {
+                  include: {
+                    user: {
+                      select: {
+                        id: true,
+                        name: true,
+                        email: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
-        orderBy: {
-          createdAt: 'desc',
+        attendances: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                student: {
+                  select: {
+                    studentId: true,
+                    matricNo: true,
+                  },
+                },
+              },
+            },
+          },
         },
-      });
-
-      try {
-        await this.cacheManager.set(cacheKey, sessions, 180000); // 3 minutes for admin view
-      } catch (error) {
-        this.logger.warn(
-          'Cache write failed for admin sessions',
-          error.message,
-        );
-      }
-    }
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
 
     await this.helpers.createSystemLog(
       `All sessions viewed by ${user.name} on ${new Date().toISOString()}`,
@@ -392,12 +398,6 @@ export class SessionsService {
     if (!user.email) {
       throw new BadRequestException('User email not found');
     }
-
-    await this.helpers.createUserLog(
-      user.email,
-      `You viewed all sessions on ${new Date().toISOString()}`,
-      Priority.LOW,
-    );
 
     return { success: true, data: sessions };
   }
@@ -411,41 +411,42 @@ export class SessionsService {
       );
     }
 
-    const cacheKey = `sessions:user:${user.id}`;
-    let sessions;
-
-    try {
-      const cached = await this.cacheManager.get(cacheKey);
-      if (cached) {
-        this.logger.log(`Cache hit: sessions for user ${user.id}`);
-        sessions = cached;
-      }
-    } catch (error) {
-      this.logger.warn(
-        `Cache read failed for user ${user.id} sessions`,
-        error.message,
-      );
-    }
-
-    if (!sessions) {
-      sessions = await this.prisma.session.findMany({
-        where: {
-          createdBy: { id: user.id },
+    const sessions = await this.prisma.session.findMany({
+      where: {
+        createdBy: { id: user.id },
+      },
+      include: {
+        createdBy: { select: { id: true, email: true, name: true } },
+        lecturer: true,
+        course: {
+          include: {
+            _count: {
+              select: { enrollments: true },
+            },
+          },
         },
-        orderBy: {
-          createdAt: 'desc',
+        attendances: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                student: {
+                  select: {
+                    studentId: true,
+                    matricNo: true,
+                  },
+                },
+              },
+            },
+          },
         },
-      });
-
-      try {
-        await this.cacheManager.set(cacheKey, sessions, 180000); // 3 minutes
-      } catch (error) {
-        this.logger.warn(
-          `Cache write failed for user ${user.id} sessions`,
-          error.message,
-        );
-      }
-    }
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
 
     if (!user.email) {
       throw new BadRequestException('User email not found');
@@ -529,20 +530,6 @@ export class SessionsService {
       Priority.MEDIUM,
     );
 
-    // Invalidate session caches after update
-    try {
-      await Promise.all([
-        this.cacheManager.del(`session:${sessionId}:active`),
-        this.cacheManager.del(`sessions:user:${user.id}`),
-        this.cacheManager.del('sessions:admin:all'),
-      ]);
-    } catch (error) {
-      this.logger.warn(
-        'Failed to invalidate session caches after update',
-        error.message,
-      );
-    }
-
     return {
       success: true,
       message: 'Session updated successfully',
@@ -614,16 +601,6 @@ export class SessionsService {
       `Session ${session.name} mode changed to CHECK_OUT by ${user.name} on ${new Date().toISOString()}`,
       Priority.MEDIUM,
     );
-
-    // Invalidate session cache after mode toggle
-    try {
-      await this.cacheManager.del(`session:${sessionId}:active`);
-    } catch (error) {
-      this.logger.warn(
-        'Failed to invalidate session cache after mode toggle',
-        error.message,
-      );
-    }
 
     return { success: true, message: 'Session mode updated successfully' };
   }
@@ -738,7 +715,7 @@ export class SessionsService {
   }
 
   async deleteSession(sessionId: string, email: string) {
-    const user = await this.helpers.getUser(decodeURIComponent(email));
+    const user = await this.helpers.getUser(email);
 
     const session = await this.prisma.session.findUnique({
       where: { id: sessionId },

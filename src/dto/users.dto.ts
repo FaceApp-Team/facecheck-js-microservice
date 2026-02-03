@@ -6,7 +6,7 @@ import {
   IsOptional,
   IsString,
 } from 'class-validator';
-import { Role } from '../../generated/prisma/enums';
+import { AccountStatus, Role } from '../../generated/prisma/enums';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class UsersDto {
@@ -24,17 +24,17 @@ export class UsersDto {
   @IsString()
   @IsOptional()
   @ApiProperty({ required: false, example: 'http://example.com/profile.jpg' })
-  profilePicture: string;
+  profilePicture?: string;
 
   @IsNumber()
   @IsOptional()
   @ApiProperty({ example: 50 })
-  lecturerHourlyRate: number;
+  lecturerHourlyRate?: number;
 
   @IsNumber()
   @IsOptional()
   @ApiProperty({ example: 120 })
-  lecturerCreditHours: number;
+  lecturerCreditHours?: number;
 
   @IsString()
   @IsNotEmpty()
@@ -48,38 +48,43 @@ export class UsersDto {
 
   @IsString()
   @ApiProperty({ example: 'secureP@ss' })
-  @IsOptional()
+  @IsNotEmpty()
   password: string;
 
   @IsString()
   @ApiProperty({ example: 'STUDENT123' })
   @IsOptional()
-  studentId: string;
+  studentId?: string;
 
   @IsString()
   @ApiProperty({ example: 'STAFF456' })
-  @IsNotEmpty()
-  staffId: string;
+  @IsOptional()
+  staffId?: string;
 
   @IsString()
   @IsOptional()
   @ApiProperty({ example: 'LECTURER456' })
-  lecturerId: string;
+  lecturerId?: string;
 
   @IsString()
   @IsOptional()
   @ApiProperty({ example: 'ADMIN789' })
-  staff: string;
+  staff?: string;
+
+  @IsEnum(AccountStatus)
+  @IsOptional()
+  @ApiProperty({ enum: AccountStatus, required: false })
+  status: AccountStatus;
 
   @IsArray()
   @IsOptional()
   @ApiProperty({ example: ['COURSE123', 'COURSE456'], required: false })
   courses?: string[];
 
-  @IsString()
-  @IsOptional()
-  @ApiProperty({ example: 'Computer Science', required: false })
-  programOfStudy?: string;
+  // @IsString()
+  // @IsOptional()
+  // @ApiProperty({ example: 'Computer Science', required: false })
+  // programOfStudy?: string;
 
   @IsString()
   @IsOptional()

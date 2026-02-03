@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -8,7 +7,6 @@ import {
 import { CoursesDto } from '../dto/courses.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { HelpersService } from '../helpers/helpers.service';
-import { Cache } from '@nestjs/cache-manager';
 import { Priority } from '../../generated/prisma/enums';
 
 @Injectable()
@@ -18,24 +16,14 @@ export class CoursesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly helpers: HelpersService,
-    @Inject('CACHE_MANAGER') private readonly cacheManager: Cache,
   ) {}
 
   async addCourse(payload: CoursesDto, email: string) {
     const user = await this.helpers.getUser(email);
-    let course;
 
-    const savedCourse = await this.cacheManager.get(
-      `course_code_${payload.courseCode}`,
-    );
-
-    if (savedCourse) {
-      course = savedCourse;
-    } else {
-      course = await this.prisma.course.findUnique({
-        where: { code: payload.courseCode },
-      });
-    }
+    const course = await this.prisma.course.findUnique({
+      where: { code: payload.courseCode },
+    });
 
     if (course) {
       return {
@@ -50,30 +38,18 @@ export class CoursesService {
       );
     }
 
-    await this.cacheManager.set(
-      `course_code_${payload.courseCode}`,
-      course,
-      600000, //cache for 10 minutes
-    );
-
     const transaction = await this.prisma.$transaction(async (tx) => {
       const newCourse = await tx.course.create({
         data: {
           code: payload.courseCode,
           title: payload.title,
           description: payload.description,
+          creditHours: payload.creditHours,
         },
       });
 
       return { newCourse };
     });
-
-    // Invalidate course list cache after adding new course
-    try {
-      await this.cacheManager.del('courses:all');
-    } catch (error) {
-      this.logger.warn('Failed to invalidate courses cache', error.message);
-    }
 
     await this.helpers.createSystemLog(
       `New course added: ${transaction.newCourse.title} by ${user.name} on ${new Date().toISOString()}`,
@@ -90,25 +66,14 @@ export class CoursesService {
   ) {
     const user = await this.helpers.getUser(email);
 
-    let course;
-    const savedCourse = await this.cacheManager.get(
-      `updated_course_${courseId}`,
-    );
-
-    if (savedCourse) {
-      course = savedCourse;
-    } else {
-      course = await this.prisma.course.findUnique({
-        where: { id: courseId },
-        include: { lecturers: true },
-      });
-    }
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+      include: { lecturers: true },
+    });
 
     if (!course) {
       throw new NotFoundException('Course not found');
     }
-
-    await this.cacheManager.set(`updated_course_${courseId}`, course, 600000); //cache for 10 minutes
 
     const transaction = await this.prisma.$transaction(async (tx) => {
       const updateData: any = {};
@@ -121,6 +86,10 @@ export class CoursesService {
       }
       if (payload.courseCode) {
         updateData.code = payload.courseCode;
+      }
+
+      if (payload.creditHours) {
+        updateData.creditHours = payload.creditHours;
       }
 
       if (payload.lecturerId) {
@@ -145,20 +114,6 @@ export class CoursesService {
       return { updatedCourse };
     });
 
-    // Invalidate course caches after update
-    try {
-      await Promise.all([
-        this.cacheManager.del(`course:${courseId}:details`),
-        this.cacheManager.del(`course:code:${course.code}`),
-        this.cacheManager.del('courses:all'),
-      ]);
-    } catch (error) {
-      this.logger.warn(
-        'Failed to invalidate course caches after update',
-        error.message,
-      );
-    }
-
     await this.helpers.createSystemLog(
       `Course updated: ${transaction.updatedCourse.title} by ${user.name} on ${new Date().toISOString()}`,
       Priority.MEDIUM,
@@ -169,25 +124,16 @@ export class CoursesService {
 
   async getAllCourses(email: string) {
     const user = await this.helpers.getUser(email);
-    let courses;
 
-    const savedCourses = await this.cacheManager.get('all_courses');
-
-    if (savedCourses) {
-      courses = savedCourses;
-    } else {
-      courses = await this.prisma.course.findMany({
-        include: {
-          lecturers: true,
-          enrollments: true,
-          reps: true,
-          sessions: true,
-        },
-        orderBy: { createdAt: 'desc' },
-      });
-
-      await this.cacheManager.set('all_courses', courses, 600000); //cache for 10 minutes
-    }
+    const courses = await this.prisma.course.findMany({
+      include: {
+        lecturers: true,
+        enrollments: true,
+        reps: true,
+        sessions: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
 
     await this.helpers.createSystemLog(
       `Fetched all courses on ${new Date().toISOString()} by ${user.name}`,
@@ -281,13 +227,121 @@ export class CoursesService {
     };
   }
 
+  async removeLecturerCourse(
+    email: string,
+    courseId: string,
+    lecturerId: string,
+  ) {
+    const user = await this.helpers.getUser(email);
+
+    const lecturer = await this.prisma.lecturer.findUnique({
+      where: { id: lecturerId },
+      include: { user: { select: { name: true, email: true } } },
+    });
+
+    const course = await this.prisma.course.findUnique({
+      where: { id: courseId },
+    });
+
+    if (!course) {
+      throw new NotFoundException('Course not found');
+    }
+
+    if (!lecturer) {
+      throw new NotFoundException('Lecturer not found');
+    }
+
+    const assignment = await this.prisma.courseLecturer.findUnique({
+      where: {
+        lecturerId_courseId: {
+          lecturerId: lecturer.id,
+          courseId,
+        },
+      },
+    });
+
+    if (!assignment) {
+      return {
+        message: 'Lecturer is not assigned to this course',
+      };
+    }
+
+    await this.prisma.courseLecturer.delete({
+      where: {
+        lecturerId_courseId: {
+          lecturerId: lecturer.id,
+          courseId,
+        },
+      },
+    });
+
+    await this.helpers.createSystemLog(
+      `Lecturer ${lecturer.user.name} removed from course ${course.title} by ${user.name} on ${new Date().toISOString()}`,
+      Priority.CRITICAL,
+    );
+    await this.helpers.createUserLog(
+      lecturer.user.email,
+      `You have been removed from course ${course.title} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+    return {
+      message: 'Lecturer removed from course successfully',
+    };
+  }
+
   async getStudentCourses(id: string) {
     const enrollments = await this.prisma.courseEnrollment.findMany({
       where: { student: { user: { id: id } } },
-      include: { course: true },
+      include: {
+        course: {
+          include: {
+            lecturers: {
+              include: {
+                lecturer: {
+                  include: {
+                    user: {
+                      select: {
+                        id: true,
+                        email: true,
+                        name: true,
+                        phone: true,
+                        profilePicture: true,
+                        isActive: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
     });
 
     const courses = enrollments.map((enrollment) => enrollment.course);
+
+    return { success: true, data: courses };
+  }
+
+  async getLecturerCourses(userId: string) {
+    // First find the lecturer by userId
+    const lecturer = await this.prisma.lecturer.findUnique({
+      where: { userId: userId },
+    });
+
+    if (!lecturer) {
+      return { success: false, data: [], message: 'Lecturer not found' };
+    }
+
+    const courses = await this.prisma.course.findMany({
+      where: { lecturers: { some: { lecturerId: lecturer.id } } },
+      include: {
+        lecturers: true,
+        sessions: true,
+        enrollments: true,
+        reps: true,
+      },
+    });
 
     return { success: true, data: courses };
   }

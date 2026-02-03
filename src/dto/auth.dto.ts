@@ -7,7 +7,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
-import { Role } from '../../generated/prisma/enums';
+import { AccountStatus, Role } from '../../generated/prisma/enums';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class AuthDto {
@@ -20,6 +20,11 @@ export class AuthDto {
   @IsNotEmpty()
   @ApiProperty({ example: 'johndoe@gmail.com' })
   email: string;
+
+  @IsEnum(AccountStatus)
+  @IsOptional()
+  @ApiProperty({ enum: AccountStatus })
+  status: AccountStatus;
 
   @IsString()
   @IsNotEmpty()

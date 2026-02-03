@@ -18,11 +18,12 @@ import { firstValueFrom } from 'rxjs';
 import { AxiosResponse } from 'axios';
 import { supabase } from '../supabase/supabase-client';
 import ShortUniqueId from 'short-unique-id';
+import { UploadFile } from '../types/image.types';
 
 @Injectable()
 export class HelpersService {
   logger = new Logger(HelpersService.name);
-  buckcetName = 'face-check-media';
+  bucketName = 'face-check-media';
   constructor(
     private readonly prisma: PrismaService,
     private readonly mailer: MailerService,
@@ -275,33 +276,31 @@ export class HelpersService {
     }
   }
 
-  async uploadImage(
-    buffer: Buffer<ArrayBufferLike>,
-    originalname: string,
-    mimetype: string,
-  ): Promise<{ imageUrl: string }> {
-    //check if buffer is empty
+  async uploadImage(file: UploadFile): Promise<{ imageUrl: string }> {
+    const { buffer, originalname, mimetype } = file;
+
     if (!buffer || buffer.length === 0) {
       throw new BadRequestException('Invalid file upload');
     }
 
-    const ext = originalname.split('.').pop();
-
+    const ext = originalname.split('.').pop()?.toLowerCase();
     const allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'];
 
-    if (!ext || !allowedExtensions.includes(ext.toLowerCase())) {
+    if (!ext || !allowedExtensions.includes(ext)) {
       throw new BadRequestException('Unsupported file type');
     }
 
-    //file name
-    const filename = `${Date.now()}-${Math.round(Math.random() * 1e9)}.${ext}`;
+    // Optional: basic mimetype check
+    if (!mimetype.startsWith('image/')) {
+      throw new BadRequestException('Invalid image mimetype');
+    }
 
+    const filename = `${crypto.randomUUID()}.${ext}`;
     const imagePath = `images/${filename}`;
 
-    //upload to supabase storage
     try {
       const { data, error } = await supabase.storage
-        .from(this.buckcetName)
+        .from(this.bucketName)
         .upload(imagePath, buffer, {
           cacheControl: '3600',
           upsert: false,
@@ -309,9 +308,9 @@ export class HelpersService {
         });
 
       if (error) {
-        this.logger.error(`Image upload failed: ${error}`);
+        this.logger.error(error.message, error);
         await this.createSystemLog(
-          `Image upload failed: ${error.message} on ${new Date().toISOString()}`,
+          `Image upload failed: ${error.message}`,
           Priority.MEDIUM,
         );
         throw new InternalServerErrorException(
@@ -319,42 +318,28 @@ export class HelpersService {
         );
       }
 
-      //get public url
       const { data: publicData } = supabase.storage
-        .from(this.buckcetName)
+        .from(this.bucketName)
         .getPublicUrl(data.path);
 
-      //check if public url is available
-      if (!publicData || !publicData.publicUrl) {
-        this.logger.error(`Failed to retrieve public URL for uploaded image.`);
-        throw new InternalServerErrorException(
-          'Failed to retrieve image URL. Please try again later.',
-        );
+      if (!publicData?.publicUrl) {
+        throw new InternalServerErrorException('Failed to retrieve image URL');
       }
 
       return { imageUrl: publicData.publicUrl };
-    } catch (error) {
-      this.logger.error(`Image upload error: ${error.message}`);
-      await this.createSystemLog(
-        `Image upload error: ${error.message} on ${new Date().toISOString()}`,
-        Priority.MEDIUM,
-      );
-      throw new InternalServerErrorException(
-        `Image upload failed: ${error.message}`,
-      );
+    } catch (err: any) {
+      this.logger.error(err.message, err);
+      throw new InternalServerErrorException('Image upload failed');
     }
   }
 
-  async uploadImages(
-    buffer: Buffer<ArrayBufferLike>[],
-    originalname: string,
-    mimetype: string,
-  ) {
-    const uploadPromises = buffer.map((buf) =>
-      this.uploadImage(buf, originalname, mimetype),
+  async uploadImages(files: UploadFile[]): Promise<string[]> {
+    return Promise.all(
+      files.map(async (file) => {
+        const result = await this.uploadImage(file);
+        return result.imageUrl;
+      }),
     );
-
-    return Promise.all(uploadPromises);
   }
 
   generateRandomCode(length: number) {
@@ -362,28 +347,32 @@ export class HelpersService {
     return id.rnd();
   }
 
-  async enrollFace(userId: string, imageUrl: string) {
-    const faceEnrollEndpoint =
-      this.config.get<string>('app.env') === 'production'
-        ? `${this.config.get<string>('face.prodEnrollUrl')}?user_id=${userId}&image_url=${imageUrl}`
-        : `${this.config.get<string>('face.enrollUrl')}?user_id=${userId}&image_url=${imageUrl}`;
+  async enrollFace(userId: string, imageUrls: string[]) {
+    if (!userId || !imageUrls || imageUrls.length === 0) {
+      throw new BadRequestException('User ID and Image URL are required');
+    }
 
-    if (!faceEnrollEndpoint) {
+    // Build the endpoint URL and query params correctly
+    const env = this.config.get<string>('app.env');
+    const baseUrl =
+      env === 'production'
+        ? this.config.get<string>('face.prodEnrollUrl')
+        : this.config.get<string>('face.enrollUrl');
+
+    if (!baseUrl) {
       throw new InternalServerErrorException(
         'Face enroll endpoint is not configured',
       );
     }
 
-    if (!userId || !imageUrl) {
-      throw new BadRequestException('User ID and Image URL are required');
-    }
+    // imageUrls should be a comma-separated string in the query param
+
+    const requestBody = { user_id: userId, image_urls: imageUrls };
+    const faceEnrollEndpoint = `${baseUrl}`;
 
     try {
       const response = await firstValueFrom(
-        this.fetch.post(faceEnrollEndpoint, {
-          userId,
-          imageUrl,
-        }),
+        this.fetch.post(faceEnrollEndpoint, requestBody),
       );
 
       if (response.status !== 200) {
@@ -391,7 +380,7 @@ export class HelpersService {
           `Face enrollment failed: ${JSON.stringify(response.data)}`,
         );
         throw new InternalServerErrorException(
-          response.data.message || 'Face enrollment failed. Try again later.',
+          response.data?.message || 'Face enrollment failed. Try again later.',
         );
       }
 
