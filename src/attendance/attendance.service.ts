@@ -1,6 +1,5 @@
 import {
   ForbiddenException,
-  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -12,15 +11,12 @@ import {
   SessionMode,
   SessionStatus,
 } from '../../generated/prisma/enums';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { Cache } from 'cache-manager';
 
 @Injectable()
 export class AttendanceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly helper: HelpersService,
-    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
   ) {}
 
   async markAttendance(
@@ -28,50 +24,23 @@ export class AttendanceService {
     face: Express.Multer.File,
     source: string,
   ) {
-    const cacheKey = `session:${sessionId}:active`;
-    let session: any;
-
-    try {
-      const cached = await this.cacheManager.get(cacheKey);
-      if (cached) {
-        session = cached;
-      }
-    } catch (error) {
-      this.helper.logger.warn(
-        `Cache read failed for session ${sessionId}`,
-        error.message,
-      );
-    }
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        startTime: true,
+        endTime: true,
+        lateThreshold: true,
+        absentThreshold: true,
+        mode: true,
+        status: true,
+        courseId: true,
+        createdBy: { select: { id: true } },
+      },
+    });
 
     if (!session) {
-      session = await this.prisma.session.findUnique({
-        where: { id: sessionId },
-        select: {
-          id: true,
-          startTime: true,
-          endTime: true,
-          lateThreshold: true,
-          absentThreshold: true,
-          mode: true,
-          status: true,
-          courseId: true,
-          createdBy: { select: { id: true } },
-        },
-      });
-
-      if (!session) {
-        throw new NotFoundException('Session not found');
-      }
-
-      // Cache active sessions for 2 minutes only (they change frequently)
-      try {
-        await this.cacheManager.set(cacheKey, session, 120000);
-      } catch (error) {
-        this.helper.logger.warn(
-          `Cache write failed for session ${sessionId}`,
-          error.message,
-        );
-      }
+      throw new NotFoundException('Session not found');
     }
 
     if (session.status !== SessionStatus.OPEN) {
@@ -82,41 +51,29 @@ export class AttendanceService {
 
     this.helper.checkMediaType(face, ['image/jpeg', 'image/png', 'image/jpg']);
 
-    const today = new Date();
-    const sessionDate = new Date(session.startTime);
+    // Always use UTC for all date/time comparisons
+    const nowUtc = new Date(new Date().toISOString());
+    const sessionStartUtc = new Date(new Date(session.startTime).toISOString());
+    const sessionEndUtc = session.endTime
+      ? new Date(new Date(session.endTime).toISOString())
+      : null;
 
-    if (
-      today.getFullYear() !== sessionDate.getFullYear() ||
-      today.getMonth() !== sessionDate.getMonth() ||
-      today.getDate() !== sessionDate.getDate()
-    ) {
-      throw new ForbiddenException('Session is not active today');
-    }
-
-    //check if attendance marking is within allowed time window
-
-    if (today < session.startTime) {
-      throw new ForbiddenException('Session has not started yet');
+    // Only allow attendance if now is between session start and end (UTC)
+    if (nowUtc < sessionStartUtc || (sessionEndUtc && nowUtc > sessionEndUtc)) {
+      throw new ForbiddenException('Session is not active now');
     }
 
     //upload face image to cloud storage
-    const imageUrl = await this.helper.uploadImage(
-      face.buffer,
-      face.originalname,
-      face.mimetype,
-    );
+    const imageUrl = await this.helper.uploadImage(face);
 
-    const sessionStartTime = session.startTime;
     const absentThreshold = session.absentThreshold;
     const lateThreshold = session.lateThreshold;
-    const sessionEndTime = session.endTime;
-    const currentTime = new Date();
 
     if (!session.createdBy) {
       throw new NotFoundException('Session creator not found');
     }
 
-    if (sessionEndTime && currentTime > sessionEndTime) {
+    if (sessionEndUtc && nowUtc > sessionEndUtc) {
       throw new ForbiddenException('Session has ended');
     }
 
@@ -124,8 +81,7 @@ export class AttendanceService {
       throw new ForbiddenException('Invalid attendance source');
     }
 
-    const diffInMins =
-      (currentTime.getTime() - sessionStartTime.getTime()) / 60000;
+    const diffInMins = (nowUtc.getTime() - sessionStartUtc.getTime()) / 60000;
 
     const isLate = diffInMins > lateThreshold;
     const isAbsent = diffInMins > absentThreshold;
@@ -145,12 +101,17 @@ export class AttendanceService {
       throw new ForbiddenException('Face recognition confidence too low');
     }
 
+    if (!getRecognition.user_id) {
+      throw new NotFoundException('User not recognized from face');
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: getRecognition.user_id },
       include: { student: { include: { enrollments: true } }, lecturer: true },
     });
 
     if (!user) {
+      console.log('User ID from recognition:', getRecognition.user_id);
       throw new NotFoundException('User not found');
     }
 
@@ -173,39 +134,36 @@ export class AttendanceService {
     }
 
     if (user.lecturer) {
-      const isCourseLecturer = await this.prisma.courseLecturer.findUnique({
+      const isLecturer = await this.prisma.lecturer.findFirst({
         where: {
-          lecturerId_courseId: {
-            lecturerId: user.lecturer.id,
-            courseId: session.courseId!,
-          },
+          id: user.lecturer.id,
         },
       });
 
-      if (!isCourseLecturer) {
+      if (!isLecturer) {
         throw new ForbiddenException('User not assigned to this course');
       }
     }
 
-    const existing = await this.prisma.attendance.findUnique({
-      where: {
-        sessionId_userId: {
-          sessionId: session.id,
-          userId: user.id,
-        },
-      },
-    });
-
-    if (
-      existing &&
-      existing.checkInTime &&
-      session.mode === SessionMode.CHECK_IN
-    ) {
-      throw new ForbiddenException('User has already checked in');
-    }
-
     //update the user attendance for the session
     if (session.mode === SessionMode.CHECK_IN) {
+      const existing = await this.prisma.attendance.findUnique({
+        where: {
+          sessionId_userId: {
+            sessionId: session.id,
+            userId: user.id,
+          },
+        },
+      });
+
+      if (
+        existing &&
+        existing.checkInTime &&
+        session.mode === SessionMode.CHECK_IN
+      ) {
+        throw new ForbiddenException('User has already checked in');
+      }
+
       const attendance = await this.prisma.attendance.upsert({
         where: {
           sessionId_userId: {
@@ -227,7 +185,7 @@ export class AttendanceService {
               : AttendanceStatus.CHECKED_IN,
           confidence: getRecognition.confidence,
           source,
-          checkInTime: new Date(),
+          checkInTime: nowUtc,
         },
       });
 
@@ -264,7 +222,7 @@ export class AttendanceService {
       const MIN_STAY_MINUTES = 30;
 
       const stayedMinutes =
-        (new Date().getTime() - existing.checkInTime!.getTime()) / 60000;
+        (nowUtc.getTime() - existing.checkInTime!.getTime()) / 60000;
 
       if (stayedMinutes < MIN_STAY_MINUTES) {
         throw new ForbiddenException('Minimum attendance duration not met');
@@ -279,7 +237,7 @@ export class AttendanceService {
       const attendance = await this.prisma.attendance.update({
         where: { id: existing.id },
         data: {
-          checkOutTime: sessionEndTime ? sessionEndTime : new Date(),
+          checkOutTime: sessionEndUtc ? sessionEndUtc : nowUtc,
           confidence: getRecognition.confidence,
           status: finalStatus,
           source,
@@ -322,8 +280,15 @@ export class AttendanceService {
   async getAllAttendance(email: string) {
     const user = await this.helper.getUser(email);
 
-    if (user.role !== 'ADMIN' && user.role !== 'SYSTEM_ADMIN') {
-      throw new ForbiddenException('Access denied. Admins only.');
+    if (
+      user.role !== 'ADMIN' &&
+      user.role !== 'SYSTEM_ADMIN' &&
+      user.role !== 'LECTURER' &&
+      user.role !== 'STAFF' &&
+      user.role !== 'REP' &&
+      user.role !== 'STUDENT'
+    ) {
+      throw new ForbiddenException('Access denied');
     }
 
     const attendance = await this.prisma.attendance.findMany({

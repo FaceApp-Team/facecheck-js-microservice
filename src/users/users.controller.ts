@@ -8,33 +8,37 @@ import {
   Query,
   Req,
   UploadedFile,
+  UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { UsersDto } from '../dto/users.dto';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Request } from 'express';
 import { Roles } from '../decorators/roles.decorator';
 import { Role } from '../../generated/prisma/enums';
 import { RolesGuard } from '../guards/roles.guard';
+import { SkipThrottle } from '@nestjs/throttler';
 
+@SkipThrottle()
 @Controller('users')
 export class UsersController {
   constructor(private readonly users: UsersService) {}
 
+  @SkipThrottle({ default: false })
   @Post('/enroll')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.STUDENT)
-  @UseInterceptors(FileInterceptor('face'))
+  @UseInterceptors(FilesInterceptor('faces'))
   async enrollUser(
     @Body() payload: Partial<UsersDto>,
-    @UploadedFile() image: Express.Multer.File,
+    @UploadedFiles() faces: Express.Multer.File[],
     @Req() req: Request,
   ) {
     const email = (req.user as any)?.email;
-    const response = await this.users.enrollUser(payload, image, email);
+    const response = await this.users.enrollUser(payload, faces, email);
     return response;
   }
 
@@ -55,13 +59,25 @@ export class UsersController {
     Role.STAFF,
   )
   @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseInterceptors(FileInterceptor('profilePicture'))
   async updateUserDetails(
     @Body() authDto: Partial<UsersDto>,
     @Req() req: Request,
+    @UploadedFile() image: Express.Multer.File,
   ) {
-    const email = (req.user as any)?.email;
+    const role = (req.user as any)?.role;
 
-    const response = await this.users.updateUserDetails(email, authDto);
+    const email =
+      role === Role.ADMIN || role === Role.SYSTEM_ADMIN
+        ? authDto.email
+        : (req.user as any)?.email;
+
+    console.log('Received authDto:', authDto);
+    console.log('authDto.email:', authDto.email);
+    console.log('Authenticated user role:', role);
+    console.log('Determined email for update:', email);
+
+    const response = await this.users.updateUserDetails(email, image, authDto);
     return response;
   }
 
@@ -69,7 +85,16 @@ export class UsersController {
   @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.STUDENT)
   @UseGuards(JwtAuthGuard, RolesGuard)
   async updateRecords(@Body() paylod: Partial<UsersDto>, @Req() req: Request) {
-    const email = (req.user as any)?.email;
+    const role = (req.user as any)?.role;
+
+    const email =
+      role === Role.ADMIN || role === Role.SYSTEM_ADMIN
+        ? paylod.email
+        : (req.user as any)?.email;
+
+    console.log('Received authDto:', paylod);
+    console.log('authDto.email:', paylod.email);
+    console.log('Authenticated user role:', role);
 
     const response = await this.users.updateRecords(email, paylod);
     return response;
@@ -90,6 +115,7 @@ export class UsersController {
     return response;
   }
 
+  @SkipThrottle({ default: false })
   @Get('/assign-rep')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER)
@@ -104,8 +130,49 @@ export class UsersController {
     return response;
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.SYSTEM_ADMIN)
   @Post('/create-admin')
   async createAdmin(
+    @Req() req: Request,
+    @Body()
+    payload: {
+      email: string;
+      name: string;
+      phone: string;
+    },
+  ) {
+    const email = req.user && (req.user as any).email;
+    console.log('Requesting user email:', email);
+    const response = await this.users.createAdmin(
+      payload.email,
+      payload.name,
+      payload.phone,
+      email,
+    );
+    return response;
+  }
+
+  @Get('/fetch-reps')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER)
+  async fetchCourseReps(@Req() req: Request) {
+    const email = (req.user as any)?.email;
+    const response = await this.users.fetchAllCourseReps(email);
+    return response;
+  }
+
+  @Get('/all-reps')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER, Role.STAFF)
+  async getAllCourseReps(@Req() req: Request) {
+    const email = (req.user as any)?.email;
+    const response = await this.users.getCourseAllReps(email);
+    return response;
+  }
+
+  @Post('/create-super-admin')
+  async createSuperAdmin(
     @Body()
     payload: {
       email: string;
@@ -114,7 +181,7 @@ export class UsersController {
     },
     @Query('secretCode') secretCode: string,
   ) {
-    const response = await this.users.createAdmin(
+    const response = await this.users.createSuperAdmin(
       payload.email,
       payload.name,
       payload.phone,

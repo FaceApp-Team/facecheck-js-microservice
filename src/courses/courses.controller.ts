@@ -15,7 +15,9 @@ import { RolesGuard } from '../guards/roles.guard';
 import { Request } from 'express';
 import { Roles } from '../decorators/roles.decorator';
 import { Role } from '../../generated/prisma/enums';
+import { SkipThrottle } from '@nestjs/throttler';
 
+@SkipThrottle()
 @Controller('courses')
 export class CoursesController {
   constructor(private readonly courses: CoursesService) {}
@@ -43,7 +45,7 @@ export class CoursesController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER, Role.STUDENT)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER, Role.STUDENT, Role.REP)
   @Get('/all')
   async getCourses(@Req() req: Request) {
     const email = (req.user as any)?.email;
@@ -61,7 +63,7 @@ export class CoursesController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER, Role.STUDENT)
   @Get('/remove-student-course')
   async removeStudentCourse(
     @Query('courseId') courseId: string,
@@ -74,6 +76,42 @@ export class CoursesController {
       courseId,
       studentId,
     );
+    return response;
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER, Role.STUDENT)
+  @Get('/remove-lecturer-course') // Fixed typo
+  async removeLecturerCourse(
+    @Query('courseId') courseId: string,
+    @Query('lecturerId') lecturerId: string, // Fixed variable name
+    @Req() req: Request,
+  ) {
+    const email = (req.user as any)?.email;
+    const response = await this.courses.removeLecturerCourse(
+      // Call correct service
+      email,
+      courseId,
+      lecturerId,
+    );
+    return response;
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER, Role.STUDENT, Role.REP)
+  @Get('/student-courses')
+  async getStudentCourses(@Req() req: Request) {
+    const id = (req.user as any)?.id;
+    const response = await this.courses.getStudentCourses(id);
+    return response;
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER)
+  @Get('/lecturer-courses')
+  async getLecturerCourses(@Req() req: Request) {
+    const id = (req.user as any)?.id;
+    const response = await this.courses.getLecturerCourses(id);
     return response;
   }
 }

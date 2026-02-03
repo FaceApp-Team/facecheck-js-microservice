@@ -16,7 +16,9 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../decorators/roles.decorator';
 import { Role } from '../../generated/prisma/enums';
 import { RolesGuard } from '../guards/roles.guard';
+import { SkipThrottle } from '@nestjs/throttler';
 
+@SkipThrottle()
 @Controller('sessions')
 export class SessionsController {
   constructor(private readonly sessions: SessionsService) {}
@@ -48,7 +50,14 @@ export class SessionsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
+  @Roles(
+    Role.ADMIN,
+    Role.SYSTEM_ADMIN,
+    Role.STUDENT,
+    Role.REP,
+    Role.STAFF,
+    Role.LECTURER,
+  )
   @Get('admin/all-sessions')
   async getAllSessionsAdmin(@Req() req: Request) {
     const email = (req.user as any)?.email;

@@ -118,7 +118,14 @@ export class AuthService {
     };
   }
 
-  async login(payload: Partial<User>): Promise<{ token: string; role: Role }> {
+  async login(payload: Partial<User>): Promise<{
+    token: string;
+    role: Role;
+    profilePicture?: string;
+    isPasswordChanged: boolean;
+    isActive: boolean;
+    accountStatus: AccountStatus;
+  }> {
     if (!payload.email || !payload.password) {
       throw new BadRequestException('Email and password are required');
     }
@@ -216,7 +223,14 @@ export class AuthService {
       Priority.LOW,
     );
 
-    return { token, role: user.role ?? Role.STUDENT };
+    return {
+      token,
+      role: user.role ?? Role.STUDENT,
+      profilePicture: user.profilePicture ?? undefined,
+      isPasswordChanged: user.isPasswordChanged || false,
+      isActive: user.isActive || false,
+      accountStatus: user.accountStatus || AccountStatus.INACTIVE,
+    };
   }
 
   private async sendVerificationCode(
@@ -227,8 +241,8 @@ export class AuthService {
     //get base URL from environment or use default
     const baseUrl =
       this.config.get<string>('app.env') === 'production'
-        ? this.config.get<string>('app.prodUrl') || 'http://localhost:3000'
-        : this.config.get<string>('app.devUrl') || 'http://localhost:3000';
+        ? this.config.get<string>('app.prodUrl') || 'http://localhost:4000'
+        : this.config.get<string>('app.devUrl') || 'http://localhost:4000';
     const verificationLink = `${baseUrl}/api/auth/verify-email?email=${encodeURIComponent(email)}&code=${code}`;
 
     //send email with verification link

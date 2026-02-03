@@ -12,7 +12,7 @@ export class SessionsDto {
   @IsEnum(SessionMode)
   @IsOptional()
   @ApiProperty({ enum: SessionMode, required: false })
-  mode: SessionMode;
+  mode?: SessionMode;
 
   @IsString()
   @IsNotEmpty()
@@ -26,17 +26,17 @@ export class SessionsDto {
   @IsString()
   @IsOptional()
   @ApiProperty({ example: 'COURSE123', required: false })
-  courseId: string;
+  courseId?: string;
 
   @IsString()
   @IsOptional()
   @ApiProperty({ example: 'LECTURER456', required: false })
-  lecturerId: string;
+  lecturerId?: string;
 
   @IsString()
   @ApiProperty({ example: 'Room 101', required: false })
   @IsOptional()
-  location: string;
+  location?: string;
 
   @IsDateString()
   @IsNotEmpty()
