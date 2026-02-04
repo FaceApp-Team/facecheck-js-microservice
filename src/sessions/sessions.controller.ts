@@ -25,7 +25,7 @@ export class SessionsController {
 
   @Post('/create')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.LECTURER, Role.REP)
+  @Roles(Role.ADMIN, Role.LECTURER, Role.REP, Role.SYSTEM_ADMIN)
   async createSession(
     @Body() payload: Partial<SessionsDto>,
     @Req() req: Request,
@@ -137,6 +137,19 @@ export class SessionsController {
   ) {
     const email = (req.user as any)?.email;
     const response = await this.sessions.disproveSession(sessionId, email);
+    return response;
+  }
+
+  @Get('/generate-qrcode')
+  async generateQRCode(@Query('sessionId') sessionId: string) {
+    const response = await this.sessions.generateQrCode(sessionId);
+    console.log(response);
+    return response;
+  }
+
+  @Get('/session')
+  async getSessionById(@Query('sessionId') sessionId: string) {
+    const response = await this.sessions.getSessionById(sessionId);
     return response;
   }
 }

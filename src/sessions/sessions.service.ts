@@ -756,4 +756,72 @@ export class SessionsService {
     );
     return { success: true, message: 'Session deleted successfully' };
   }
+
+  async generateQrCode(sessionId: string) {
+    const image = await this.helpers.generateQRCode(sessionId);
+    console.log(image);
+    return {
+      message: 'QR Code generated successfully',
+      data: image,
+    };
+  }
+
+  async getSessionById(sessionId: string) {
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      include: {
+        createdBy: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+          },
+        },
+        lecturer: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            },
+          },
+        },
+        course: {
+          include: {
+            _count: {
+              select: { enrollments: true },
+            },
+          },
+        },
+        attendances: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                student: {
+                  select: {
+                    studentId: true,
+                    matricNo: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Session not found');
+    }
+
+    return {
+      success: true,
+      data: session,
+    };
+  }
 }

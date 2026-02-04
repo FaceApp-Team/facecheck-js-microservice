@@ -7,6 +7,7 @@ export default () => ({
     secretCode: process.env.FACE_CHECK_SECRET_CODE || '',
     prodUrl: process.env.APP_PROD_URL || 'http://localhost:3000',
     devUrl: process.env.APP_DEV_URL || 'http://localhost:3000',
+    clientKioskUrl: process.env.KIOSK_MODE_URL || 'http://localhost:3000/kiosk',
   },
   jwt: {
     secret: process.env.JWT_SECRET || '',
@@ -42,5 +43,9 @@ export default () => ({
     url: process.env.SUPABASE_URL || '',
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
     anonKey: process.env.SUPABASE_ANON_KEY || '',
+  },
+  apiNinjas: {
+    baseUrl: process.env.API_NINJAS_BASE_URL || '',
+    apiKey: process.env.API_NINJAS_API_KEY || '',
   },
 });

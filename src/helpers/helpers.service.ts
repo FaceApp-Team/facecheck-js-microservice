@@ -461,4 +461,52 @@ export class HelpersService {
       throw new UnsupportedMediaTypeException('Unsupported media type');
     }
   }
+
+  async generateQRCode(sessionId: string) {
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Session not found');
+    }
+
+    const apiNinjaBaseUrl = this.config.get<string>('apiNinjas.baseUrl');
+    const apiNinjaApiKey = this.config.get<string>('apiNinjas.apiKey');
+
+    if (!apiNinjaBaseUrl || !apiNinjaApiKey) {
+      throw new InternalServerErrorException(
+        'API Ninjas configuration is missing',
+      );
+    }
+    const kioskModeUrl = this.config.get<string>('app.clientKioskUrl');
+
+    if (!kioskModeUrl) {
+      throw new InternalServerErrorException(
+        'Kiosk mode URL is not configured',
+      );
+    }
+
+    const response = await firstValueFrom(
+      this.fetch.get(
+        `${apiNinjaBaseUrl}/qrcode?data=${kioskModeUrl}/${sessionId}&format=png&bg_color=0000ff`,
+        {
+          headers: {
+            'X-Api-Key': apiNinjaApiKey,
+          },
+        },
+      ),
+    );
+
+    if (response.status !== 200) {
+      this.logger.error(
+        `QR code generation failed: ${JSON.stringify(response.data)}`,
+      );
+      throw new InternalServerErrorException(
+        response.data?.message || 'QR code generation failed. Try again later.',
+      );
+    }
+
+    return response.data;
+  }
 }
