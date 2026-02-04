@@ -759,7 +759,6 @@ export class SessionsService {
 
   async generateQrCode(sessionId: string) {
     const image = await this.helpers.generateQRCode(sessionId);
-    console.log(image);
     return {
       message: 'QR Code generated successfully',
       data: image,

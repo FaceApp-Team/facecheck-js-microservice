@@ -200,6 +200,8 @@ export class AttendanceService {
         Priority.MEDIUM,
       );
 
+      console.log(getRecognition);
+
       return { attendance: attendance, score: getRecognition.score };
     } else if (session.mode === SessionMode.CHECK_OUT) {
       const existing = await this.prisma.attendance.findUnique({
@@ -243,6 +245,8 @@ export class AttendanceService {
           source,
         },
       });
+
+      console.log('Checkout' + '' + getRecognition);
 
       await this.helper.createUserLog(
         user.email,
