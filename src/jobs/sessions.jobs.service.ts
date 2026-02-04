@@ -14,7 +14,7 @@ export class SessionJobs {
   // Runs every hour on Saturday (6) and Sunday (0)
   @Cron('0 0 * * * 0,6')
   async autoCloseWeekendStaleSessions() {
-    const now = new Date();
+    const now = new Date(new Date().toISOString()); // Use UTC time
 
     const sixDaysAgo = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -40,7 +40,7 @@ export class SessionJobs {
   //close sessions whose endtime has passed every 15 minutes
   @Cron('*/15 * * * *')
   async autoCloseEndedSessions() {
-    const now = new Date();
+    const now = new Date(new Date().toISOString()); // Use UTC time
 
     const result = await this.prisma.session.updateMany({
       where: {

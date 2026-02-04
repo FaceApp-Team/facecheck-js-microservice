@@ -7,7 +7,7 @@ export class AuthJobs {
   constructor(private readonly prisma: PrismaService) {}
   @Cron('*/1 */1 * * *')
   async unlockUserAccounts(): Promise<void> {
-    const now = new Date();
+    const now = new Date(new Date().toISOString());
     await this.prisma.user.updateMany({
       where: {
         accountLockedUntil: {
