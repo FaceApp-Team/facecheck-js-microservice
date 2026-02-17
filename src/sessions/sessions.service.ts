@@ -27,18 +27,30 @@ export class SessionsService {
   async createSession(payload: Partial<SessionsDto>, email: string) {
     const user = await this.helpers.getUser(email);
 
+    // Only REPs can create sessions
+    if (user.role !== Role.REP) {
+      throw new ForbiddenException(
+        'Only student representatives can create sessions',
+      );
+    }
+
     if (!payload.name || !payload.type) {
       throw new BadRequestException(
         'Session name and session type are required',
       );
     }
 
-    if (user.role === Role.REP && !payload.lecturerId) {
+    // REPs must select lecturer, course and module for the session
+    if (!payload.lecturerId) {
       throw new BadRequestException('Please select a lecturer for the session');
     }
 
-    if (user.role === Role.LECTURER && !payload.courseId) {
-      throw new BadRequestException('Please choose a course for the session');
+    if (!payload.courseId) {
+      throw new BadRequestException('Please select a course for the session');
+    }
+
+    if (!payload.moduleId) {
+      throw new BadRequestException('Please select a module for the session');
     }
 
     if (!payload.mode) {
@@ -81,202 +93,110 @@ export class SessionsService {
       );
     }
 
-    if (user.role === Role.REP) {
-      const lecturer = await this.prisma.lecturer.findUnique({
-        where: {
-          id: payload.lecturerId,
+    // Verify lecturer exists
+    const lecturer = await this.prisma.lecturer.findUnique({
+      where: {
+        id: payload.lecturerId,
+      },
+      include: {
+        thresholds: {
+          select: { lateThreshold: true, absentThreshold: true },
         },
-      });
+      },
+    });
 
-      if (!lecturer) {
-        throw new NotFoundException('Lecturer not found');
-      }
-
-      const rep = await this.prisma.student.findUnique({
-        where: {
-          userId: user.id,
-        },
-        include: {
-          courseReps: {
-            include: {
-              thresholds: {
-                select: { lateThreshold: true, absentThreshold: true },
-              },
-            },
-          },
-        },
-      });
-
-      const uniqueRep = await this.prisma.courseRep.findFirst({
-        where: {
-          studentId: rep?.id,
-          course: {
-            lecturers: {
-              some: {
-                lecturerId: lecturer.id,
-              },
-            },
-          },
-        },
-        include: {
-          thresholds: {
-            select: { lateThreshold: true, absentThreshold: true },
-          },
-        },
-      });
-
-      if (!rep?.courseReps || rep.courseReps.length === 0) {
-        throw new NotFoundException('User not a course representative');
-      }
-
-      const isAuthorized = await this.prisma.courseLecturer.findFirst({
-        where: {
-          lecturerId: lecturer.id ?? payload.lecturerId,
-          courseId: { in: rep.courseReps.map((r) => r.courseId) },
-        },
-        include: {
-          lecturer: {
-            select: {
-              hourlyRate: true,
-              creditHours: true,
-            },
-          },
-        },
-      });
-
-      //check if session start time and end time does not exceed credit hours
-      if (isAuthorized) {
-        const sessionDurationHours =
-          (sessionEndTime.getTime() - sessionStartTime.getTime()) /
-          (1000 * 60 * 60);
-
-        if (sessionDurationHours > isAuthorized.lecturer.creditHours) {
-          throw new BadRequestException(
-            "Session duration exceeds lecturer's credit hours",
-          );
-        }
-      }
-
-      if (!isAuthorized) {
-        throw new ForbiddenException(
-          'You are not authorized to create session for this lecturer',
-        );
-      }
-
-      const sessionToken = this.helpers.generateRandomCode(12);
-
-      //create session for rep
-      const transaction = await this.prisma.$transaction(async (tx) => {
-        const session = await tx.session.create({
-          data: {
-            name: sessionName,
-            type: type,
-            mode: mode,
-            token: sessionToken,
-            lecturer: {
-              connect: { id: lecturer.id },
-            },
-            startTime: sessionStartTime,
-            endTime: sessionEndTime,
-            lateThreshold: uniqueRep?.thresholds?.lateThreshold,
-            absentThreshold: uniqueRep?.thresholds?.absentThreshold,
-            createdBy: {
-              connect: { id: user.id },
-            },
-          },
-        });
-
-        return {
-          session,
-        };
-      });
-
-      return { success: true, data: transaction.session };
-    } else if (user.role === Role.LECTURER) {
-      const course = await this.prisma.course.findUnique({
-        where: {
-          id: payload.courseId,
-        },
-      });
-
-      if (!course) {
-        throw new NotFoundException('Course not found');
-      }
-
-      const lecturer = await this.prisma.lecturer.findUnique({
-        where: {
-          userId: user.id,
-        },
-      });
-
-      if (!lecturer) {
-        throw new NotFoundException('Lecturer profile not found');
-      }
-
-      const assignment = await this.prisma.courseLecturer.findFirst({
-        where: {
-          lecturerId: lecturer.id,
-          courseId: payload.courseId,
-        },
-        include: {
-          lecturer: {
-            select: {
-              userId: true,
-              id: true,
-              thresholds: {
-                select: { lateThreshold: true, absentThreshold: true },
-              },
-            },
-          },
-        },
-      });
-
-      if (!assignment) {
-        throw new ForbiddenException('Lecturer not assigned to this course');
-      }
-
-      const sessionToken = this.helpers.generateRandomCode(12);
-
-      const transaction = await this.prisma.$transaction(async (tx) => {
-        //create session for lecturer
-        const session = await tx.session.create({
-          data: {
-            name: sessionName,
-            type: type,
-            mode: mode,
-            token: sessionToken,
-            course: {
-              connect: { id: course.id },
-            },
-            startTime: sessionStartTime,
-            endTime: sessionEndTime,
-            lateThreshold: assignment.lecturer.thresholds?.lateThreshold,
-            absentThreshold: assignment.lecturer.thresholds?.absentThreshold,
-            createdBy: {
-              connect: { id: user.id },
-            },
-          },
-        });
-        return {
-          session,
-        };
-      });
-
-      await this.helpers.createUserLog(
-        user.email,
-        `Session ${sessionName} created successfully on ${new Date().toISOString()}`,
-        Priority.MEDIUM,
-      );
-
-      await this.helpers.createSystemLog(
-        `Session ${sessionName} created by ${user.name} on ${new Date().toISOString()}`,
-        Priority.MEDIUM,
-      );
-
-      return { success: true, data: transaction.session };
-    } else {
-      throw new ForbiddenException('Access forbidden for this action');
+    if (!lecturer) {
+      throw new NotFoundException('Lecturer not found');
     }
+
+    // Verify user is a student rep
+    const rep = await this.prisma.student.findUnique({
+      where: {
+        userId: user.id,
+      },
+      include: {
+        studentRep: {
+          include: {
+            thresholds: {
+              select: { lateThreshold: true, absentThreshold: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!rep?.studentRep) {
+      throw new NotFoundException('User not a student representative');
+    }
+
+    // Validate course (required)
+    const course = await this.prisma.course.findUnique({
+      where: { id: payload.courseId },
+    });
+    if (!course) {
+      throw new NotFoundException('Course not found');
+    }
+
+    // Validate module (required)
+    const module = await this.prisma.module.findUnique({
+      where: { id: payload.moduleId },
+    });
+    if (!module) {
+      throw new NotFoundException('Module not found');
+    }
+
+    const sessionToken = this.helpers.generateRandomCode(12);
+
+    // Use rep's thresholds or lecturer's thresholds
+    const thresholds = rep.studentRep.thresholds || lecturer.thresholds;
+
+    // Build session data
+    const sessionData: any = {
+      name: sessionName,
+      type: type,
+      mode: mode,
+      token: sessionToken,
+      lecturer: {
+        connect: { id: lecturer.id },
+      },
+      course: {
+        connect: { id: course.id },
+      },
+      module: {
+        connect: { id: module.id },
+      },
+      startTime: sessionStartTime,
+      endTime: sessionEndTime,
+      lateThreshold: thresholds?.lateThreshold,
+      absentThreshold: thresholds?.absentThreshold,
+      createdBy: {
+        connect: { id: user.id },
+      },
+    };
+
+    // Create session
+    const transaction = await this.prisma.$transaction(async (tx) => {
+      const session = await tx.session.create({
+        data: sessionData,
+      });
+
+      return {
+        session,
+      };
+    });
+
+    await this.helpers.createUserLog(
+      user.email,
+      `Session ${sessionName} created successfully on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+
+    await this.helpers.createSystemLog(
+      `Session ${sessionName} created by rep ${user.name} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+
+    return { success: true, data: transaction.session };
   }
 
   async closeSession(sessionId: string, email: string) {
@@ -345,6 +265,7 @@ export class SessionsService {
       include: {
         createdBy: true,
         lecturer: true,
+        module: true,
         course: {
           include: {
             _count: {
@@ -405,9 +326,9 @@ export class SessionsService {
   async getSessionCreatorSessions(email: string) {
     const user = await this.helpers.getUser(email);
 
-    if (user.role !== Role.LECTURER && user.role !== Role.REP) {
+    if (user.role !== Role.REP) {
       throw new ForbiddenException(
-        'Only lecturers and course representatives can access their sessions',
+        'Only student representatives can access their sessions',
       );
     }
 
@@ -418,6 +339,7 @@ export class SessionsService {
       include: {
         createdBy: { select: { id: true, email: true, name: true } },
         lecturer: true,
+        module: true,
         course: {
           include: {
             _count: {

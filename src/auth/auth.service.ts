@@ -86,7 +86,7 @@ export class AuthService {
     //send the email verification code (after user is created)
     try {
       await this.sendVerificationCode(payload.email, payload.name, code);
-    } catch (emailError) {
+    } catch (emailError: any) {
       // Rollback: delete the user if email sending fails
       await this.prisma.user.delete({
         where: { email: payload.email },

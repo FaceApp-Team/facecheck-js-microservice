@@ -142,7 +142,7 @@ export class HelpersService {
       );
 
       return mail;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to send email to ${to}:`, error.message);
       this.logger.error('Error details:', error.stack);
 
@@ -210,7 +210,7 @@ export class HelpersService {
       }
 
       return response;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`SMS sending error: ${error.message}`);
       await this.createSystemLog(
         `Error sending SMS to ${recipients.join(
@@ -247,7 +247,7 @@ export class HelpersService {
           },
         },
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to create user log: ${error.message}`);
       throw new InternalServerErrorException(
         `Failed to create user log: ${error.message}`,
@@ -268,7 +268,7 @@ export class HelpersService {
           priority: priority,
         },
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to create system log: ${error.message}`);
       throw new InternalServerErrorException(
         `Failed to create system log: ${error.message}`,
@@ -385,7 +385,7 @@ export class HelpersService {
       }
 
       return response.data;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Face enrollment error: ${error.message}`);
       throw new InternalServerErrorException(
         `Face enrollment failed: ${error.message}`,
@@ -426,7 +426,7 @@ export class HelpersService {
       }
 
       return response.data;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Face recognition error: ${error.message}`);
       throw new InternalServerErrorException(
         `Face recognition failed: ${error.message}`,

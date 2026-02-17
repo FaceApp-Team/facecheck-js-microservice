@@ -17,11 +17,20 @@ export class SessionsDto {
   @IsString()
   @IsNotEmpty()
   @ApiProperty({ example: 'Morning Lecture on Anatomy' })
-  name: string;
+  name!: string;
 
   @IsEnum(SessionType)
   @IsNotEmpty()
-  type: SessionType;
+  type!: SessionType;
+
+  @IsString()
+  @IsOptional()
+  @ApiProperty({
+    example: 'MODULE123',
+    required: false,
+    description: 'Module ID for the session',
+  })
+  moduleId?: string;
 
   @IsString()
   @IsOptional()
@@ -41,10 +50,10 @@ export class SessionsDto {
   @IsDateString()
   @IsNotEmpty()
   @ApiProperty({ example: '2024-07-01T09:00:00Z' })
-  startTime: Date;
+  startTime!: Date;
 
   @IsDateString()
   @IsNotEmpty()
   @ApiProperty({ example: '2024-07-01T11:00:00Z' })
-  endTime: Date;
+  endTime!: Date;
 }

@@ -4,7 +4,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { CoursesDto } from '../dto/courses.dto';
+import { CoursesDto, ModulesDto } from '../dto/courses.dto';
 import { PrismaService } from '../prisma/prisma.service';
 import { HelpersService } from '../helpers/helpers.service';
 import { Priority } from '../../generated/prisma/enums';
@@ -17,6 +17,199 @@ export class CoursesService {
     private readonly prisma: PrismaService,
     private readonly helpers: HelpersService,
   ) {}
+
+  // ==================== MODULE METHODS ====================
+
+  async addModule(payload: ModulesDto, email: string) {
+    const user = await this.helpers.getUser(email);
+
+    const existingModule = await this.prisma.module.findUnique({
+      where: { code: payload.moduleCode },
+    });
+
+    if (existingModule) {
+      return {
+        message: 'Module with this code already exists',
+        module: existingModule,
+      };
+    }
+
+    if (!payload.name || !payload.moduleCode) {
+      throw new BadRequestException('Module name and code are required');
+    }
+
+    const newModule = await this.prisma.module.create({
+      data: {
+        name: payload.name,
+        code: payload.moduleCode,
+        description: payload.description,
+        duration: payload.duration ?? 12,
+      },
+    });
+
+    await this.helpers.createSystemLog(
+      `New module added: ${newModule.name} by ${user.name} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+
+    return { success: true, data: newModule };
+  }
+
+  async updateModule(
+    moduleId: string,
+    payload: Partial<ModulesDto>,
+    email: string,
+  ) {
+    const user = await this.helpers.getUser(email);
+
+    const module = await this.prisma.module.findUnique({
+      where: { id: moduleId },
+    });
+
+    if (!module) {
+      throw new NotFoundException('Module not found');
+    }
+
+    const updateData: any = {};
+
+    if (payload.name) {
+      updateData.name = payload.name;
+    }
+    if (payload.description) {
+      updateData.description = payload.description;
+    }
+    if (payload.moduleCode) {
+      updateData.code = payload.moduleCode;
+    }
+    if (payload.duration) {
+      updateData.duration = payload.duration;
+    }
+
+    const updatedModule = await this.prisma.module.update({
+      where: { id: moduleId },
+      data: updateData,
+    });
+
+    await this.helpers.createSystemLog(
+      `Module updated: ${updatedModule.name} by ${user.name} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+
+    return { success: true, data: updatedModule };
+  }
+
+  async getAllModules(email: string) {
+    const user = await this.helpers.getUser(email);
+
+    const modules = await this.prisma.module.findMany({
+      include: {
+        courses: {
+          include: {
+            lecturers: {
+              include: {
+                lecturer: {
+                  include: {
+                    user: {
+                      select: { id: true, name: true, email: true },
+                    },
+                  },
+                },
+              },
+            },
+            enrollments: true,
+            sessions: true,
+          },
+        },
+        enrollments: {
+          include: {
+            student: {
+              include: {
+                user: {
+                  select: { id: true, name: true, email: true },
+                },
+              },
+            },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    await this.helpers.createSystemLog(
+      `Fetched all modules on ${new Date().toISOString()} by ${user.name}`,
+      Priority.LOW,
+    );
+
+    return { success: true, data: modules };
+  }
+
+  async getModuleById(moduleId: string, email: string) {
+    await this.helpers.getUser(email);
+
+    const module = await this.prisma.module.findUnique({
+      where: { id: moduleId },
+      include: {
+        courses: {
+          include: {
+            lecturers: {
+              include: {
+                lecturer: {
+                  include: {
+                    user: {
+                      select: { id: true, name: true, email: true },
+                    },
+                  },
+                },
+              },
+            },
+            enrollments: true,
+          },
+        },
+        enrollments: {
+          include: {
+            student: {
+              include: {
+                user: {
+                  select: { id: true, name: true, email: true },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!module) {
+      throw new NotFoundException('Module not found');
+    }
+
+    return { success: true, data: module };
+  }
+
+  async removeModule(moduleId: string, email: string) {
+    const user = await this.helpers.getUser(email);
+
+    const module = await this.prisma.module.findUnique({
+      where: { id: moduleId },
+    });
+
+    if (!module) {
+      throw new NotFoundException('Module not found');
+    }
+
+    await this.prisma.module.delete({
+      where: { id: moduleId },
+    });
+
+    await this.helpers.createSystemLog(
+      `Module removed: ${module.name} by ${user.name} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+
+    return { success: true, message: 'Module removed successfully' };
+  }
+
+  // ==================== COURSE METHODS ====================
 
   async addCourse(payload: CoursesDto, email: string) {
     const user = await this.helpers.getUser(email);
@@ -32,31 +225,36 @@ export class CoursesService {
       };
     }
 
-    if (!payload.description || !payload.title || !payload.courseCode) {
-      throw new BadRequestException(
-        'Course title, code and description are required',
-      );
+    if (!payload.title || !payload.courseCode) {
+      throw new BadRequestException('Course title and code are required');
     }
 
-    const transaction = await this.prisma.$transaction(async (tx) => {
-      const newCourse = await tx.course.create({
-        data: {
-          code: payload.courseCode,
-          title: payload.title,
-          description: payload.description,
-          creditHours: payload.creditHours,
-        },
+    // Validate module if provided
+    if (payload.moduleId) {
+      const module = await this.prisma.module.findUnique({
+        where: { id: payload.moduleId },
       });
+      if (!module) {
+        throw new NotFoundException('Module not found');
+      }
+    }
 
-      return { newCourse };
+    const newCourse = await this.prisma.course.create({
+      data: {
+        code: payload.courseCode,
+        title: payload.title,
+        description: payload.description,
+        creditHours: payload.creditHours,
+        moduleId: payload.moduleId,
+      },
     });
 
     await this.helpers.createSystemLog(
-      `New course added: ${transaction.newCourse.title} by ${user.name} on ${new Date().toISOString()}`,
+      `New course added: ${newCourse.title} by ${user.name} on ${new Date().toISOString()}`,
       Priority.MEDIUM,
     );
 
-    return { success: true, data: transaction.newCourse };
+    return { success: true, data: newCourse };
   }
 
   async updateCourse(
@@ -75,51 +273,41 @@ export class CoursesService {
       throw new NotFoundException('Course not found');
     }
 
-    const transaction = await this.prisma.$transaction(async (tx) => {
-      const updateData: any = {};
+    const updateData: any = {};
 
-      if (payload.title) {
-        updateData.title = payload.title;
-      }
-      if (payload.description) {
-        updateData.description = payload.description;
-      }
-      if (payload.courseCode) {
-        updateData.code = payload.courseCode;
-      }
-
-      if (payload.creditHours) {
-        updateData.creditHours = payload.creditHours;
-      }
-
-      if (payload.lecturerId) {
-        const lecturer = await tx.lecturer.findUnique({
-          where: { id: payload.lecturerId },
-        });
-
-        if (!lecturer) {
-          throw new NotFoundException('Lecturer not found');
-        }
-
-        updateData.lecturers = {
-          connect: { id: payload.lecturerId },
-        };
-      }
-
-      const updatedCourse = await tx.course.update({
-        where: { id: courseId },
-        data: updateData,
+    if (payload.title) {
+      updateData.title = payload.title;
+    }
+    if (payload.description) {
+      updateData.description = payload.description;
+    }
+    if (payload.courseCode) {
+      updateData.code = payload.courseCode;
+    }
+    if (payload.creditHours) {
+      updateData.creditHours = payload.creditHours;
+    }
+    if (payload.moduleId) {
+      const module = await this.prisma.module.findUnique({
+        where: { id: payload.moduleId },
       });
+      if (!module) {
+        throw new NotFoundException('Module not found');
+      }
+      updateData.moduleId = payload.moduleId;
+    }
 
-      return { updatedCourse };
+    const updatedCourse = await this.prisma.course.update({
+      where: { id: courseId },
+      data: updateData,
     });
 
     await this.helpers.createSystemLog(
-      `Course updated: ${transaction.updatedCourse.title} by ${user.name} on ${new Date().toISOString()}`,
+      `Course updated: ${updatedCourse.title} by ${user.name} on ${new Date().toISOString()}`,
       Priority.MEDIUM,
     );
 
-    return { success: true, data: transaction.updatedCourse };
+    return { success: true, data: updatedCourse };
   }
 
   async getAllCourses(email: string) {
@@ -127,10 +315,20 @@ export class CoursesService {
 
     const courses = await this.prisma.course.findMany({
       include: {
-        lecturers: true,
+        lecturers: {
+          include: {
+            lecturer: {
+              include: {
+                user: {
+                  select: { id: true, name: true, email: true },
+                },
+              },
+            },
+          },
+        },
         enrollments: true,
-        reps: true,
         sessions: true,
+        module: true,
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -336,10 +534,20 @@ export class CoursesService {
     const courses = await this.prisma.course.findMany({
       where: { lecturers: { some: { lecturerId: lecturer.id } } },
       include: {
-        lecturers: true,
+        lecturers: {
+          include: {
+            lecturer: {
+              include: {
+                user: {
+                  select: { id: true, name: true, email: true },
+                },
+              },
+            },
+          },
+        },
         sessions: true,
         enrollments: true,
-        reps: true,
+        module: true,
       },
     });
 

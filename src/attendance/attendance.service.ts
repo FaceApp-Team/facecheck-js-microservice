@@ -115,9 +115,9 @@ export class AttendanceService {
       throw new NotFoundException('User not found');
     }
 
-    if (session.createdBy.id === getRecognition.user_id) {
-      throw new ForbiddenException('Session creator cannot mark attendance');
-    }
+    // if (session.createdBy.id === getRecognition.user_id) {
+    //   throw new ForbiddenException('Session creator cannot mark attendance');
+    // }
 
     if (!user.student && !user.lecturer) {
       throw new ForbiddenException('User is not a student or lecturer');
@@ -130,18 +130,6 @@ export class AttendanceService {
         )
       ) {
         throw new ForbiddenException('User not enrolled for this course');
-      }
-    }
-
-    if (user.lecturer) {
-      const isLecturer = await this.prisma.lecturer.findFirst({
-        where: {
-          id: user.lecturer.id,
-        },
-      });
-
-      if (!isLecturer) {
-        throw new ForbiddenException('User not assigned to this course');
       }
     }
 
@@ -221,13 +209,15 @@ export class AttendanceService {
         throw new ForbiddenException('User has already checked out');
       }
 
-      const MIN_STAY_MINUTES = 30;
+      // Skip minimum stay check for lecturers
+      if (!user.lecturer) {
+        const MIN_STAY_MINUTES = 30;
+        const stayedMinutes =
+          (nowUtc.getTime() - existing.checkInTime!.getTime()) / 60000;
 
-      const stayedMinutes =
-        (nowUtc.getTime() - existing.checkInTime!.getTime()) / 60000;
-
-      if (stayedMinutes < MIN_STAY_MINUTES) {
-        throw new ForbiddenException('Minimum attendance duration not met');
+        if (stayedMinutes < MIN_STAY_MINUTES) {
+          throw new ForbiddenException('Minimum attendance duration not met');
+        }
       }
 
       let finalStatus = existing.status;
@@ -350,5 +340,195 @@ export class AttendanceService {
     );
 
     return { message: 'Attendance record deleted successfully' };
+  }
+
+  /**
+   * Manual attendance marking by REPs
+   * Allows reps to mark attendance for students and lecturers manually
+   */
+  async markManualAttendance(
+    sessionId: string,
+    userId: string,
+    status: AttendanceStatus,
+    remarks: string | undefined,
+    repEmail: string,
+  ) {
+    const rep = await this.helper.getUser(repEmail);
+
+    if (
+      rep.role !== 'REP' &&
+      rep.role !== 'ADMIN' &&
+      rep.role !== 'SYSTEM_ADMIN'
+    ) {
+      throw new ForbiddenException(
+        'Only reps and admins can mark manual attendance',
+      );
+    }
+
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        startTime: true,
+        endTime: true,
+        status: true,
+        courseId: true,
+        moduleId: true,
+        course: { select: { moduleId: true } },
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Session not found');
+    }
+
+    if (
+      session.status !== SessionStatus.OPEN &&
+      session.status !== SessionStatus.CLOSED
+    ) {
+      throw new ForbiddenException(
+        'Session must be open or closed to mark manual attendance',
+      );
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        student: { include: { enrollments: true, moduleEnrollments: true } },
+        lecturer: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    // Verify user is enrolled in the course/module or is a lecturer
+    if (user.student) {
+      const isEnrolledInCourse = user.student.enrollments.some(
+        (enr) => enr.courseId === session.courseId,
+      );
+      const isEnrolledInModule = session.moduleId
+        ? user.student.moduleEnrollments?.some(
+            (enr) => enr.moduleId === session.moduleId,
+          )
+        : session.course?.moduleId
+          ? user.student.moduleEnrollments?.some(
+              (enr) => enr.moduleId === session.course?.moduleId,
+            )
+          : false;
+
+      if (!isEnrolledInCourse && !isEnrolledInModule) {
+        throw new ForbiddenException(
+          'Student not enrolled in this course or module',
+        );
+      }
+    }
+
+    // For lecturers, no enrollment check needed (part-time lecturers)
+    if (!user.student && !user.lecturer) {
+      throw new ForbiddenException('User must be a student or lecturer');
+    }
+
+    const nowUtc = new Date(new Date().toISOString());
+
+    // Determine checkIn/checkOut times based on status
+    let checkInTime: Date | null = null;
+    let checkOutTime: Date | null = null;
+
+    if (
+      status === AttendanceStatus.PRESENT ||
+      status === AttendanceStatus.CHECKED_IN ||
+      status === AttendanceStatus.LATE
+    ) {
+      checkInTime = session.startTime;
+      if (status === AttendanceStatus.PRESENT) {
+        checkOutTime = session.endTime || nowUtc;
+      }
+    }
+
+    const attendance = await this.prisma.attendance.upsert({
+      where: {
+        sessionId_userId: {
+          sessionId: session.id,
+          userId: user.id,
+        },
+      },
+      update: {
+        status,
+        checkInTime,
+        checkOutTime,
+        remarks,
+        source: 'manual',
+      },
+      create: {
+        sessionId: session.id,
+        userId: user.id,
+        status,
+        checkInTime,
+        checkOutTime,
+        remarks,
+        source: 'manual',
+      },
+    });
+
+    await this.helper.createUserLog(
+      user.email || user.id,
+      `Your attendance was manually marked as ${status} for session ${session.id} by rep ${rep.email}`,
+      Priority.MEDIUM,
+    );
+
+    await this.helper.createSystemLog(
+      `Rep ${rep.email} manually marked attendance for user ${user.email || user.id} as ${status} for session ${session.id}`,
+      Priority.MEDIUM,
+    );
+
+    return attendance;
+  }
+
+  /**
+   * Bulk manual attendance marking
+   * Allows reps to mark attendance for multiple users at once
+   */
+  async markBulkManualAttendance(
+    sessionId: string,
+    attendanceRecords: {
+      userId: string;
+      status: AttendanceStatus;
+      remarks?: string;
+    }[],
+    repEmail: string,
+  ) {
+    const results: {
+      userId: string;
+      success: boolean;
+      attendance?: any;
+    }[] = [];
+    const errors: {
+      userId: string;
+      success: boolean;
+      error: string;
+    }[] = [];
+
+    for (const record of attendanceRecords) {
+      try {
+        const attendance = await this.markManualAttendance(
+          sessionId,
+          record.userId,
+          record.status,
+          record.remarks,
+          repEmail,
+        );
+        results.push({ userId: record.userId, success: true, attendance });
+      } catch (error) {
+        errors.push({
+          userId: record.userId,
+          success: false,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+
+    return { results, errors, totalProcessed: attendanceRecords.length };
   }
 }

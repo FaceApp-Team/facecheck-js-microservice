@@ -14,32 +14,32 @@ export class AuthDto {
   @IsString()
   @IsNotEmpty()
   @ApiProperty({ example: 'John Doe' })
-  name: string;
+  name!: string;
 
   @IsEmail()
   @IsNotEmpty()
   @ApiProperty({ example: 'johndoe@gmail.com' })
-  email: string;
+  email!: string;
 
   @IsEnum(AccountStatus)
   @IsOptional()
   @ApiProperty({ enum: AccountStatus })
-  status: AccountStatus;
+  status?: AccountStatus;
 
   @IsString()
   @IsNotEmpty()
   @MinLength(6)
   @MaxLength(15)
   @ApiProperty({ example: 'secureP@ss' })
-  password: string;
+  password!: string;
 
   @IsString()
   @IsNotEmpty()
   @ApiProperty({ example: '+1234567890' })
-  phone: string;
+  phone!: string;
 
   @IsEnum(Role)
   @IsOptional()
   @ApiProperty({ enum: Role, required: false })
-  role: Role;
+  role?: Role;
 }

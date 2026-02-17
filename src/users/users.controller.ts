@@ -13,7 +13,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
-import { UsersDto } from '../dto/users.dto';
+import { UsersDto, ModuleEnrollmentDto } from '../dto/users.dto';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Request } from 'express';
@@ -26,6 +26,56 @@ import { SkipThrottle } from '@nestjs/throttler';
 @Controller('users')
 export class UsersController {
   constructor(private readonly users: UsersService) {}
+
+  /**
+   * Separate face enrollment endpoint
+   */
+  @SkipThrottle({ default: false })
+  @Post('/enroll-face')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.STUDENT, Role.LECTURER, Role.STAFF)
+  @UseInterceptors(FilesInterceptor('faces'))
+  async enrollFace(
+    @UploadedFiles() faces: Express.Multer.File[],
+    @Req() req: Request,
+  ) {
+    const email = (req.user as any)?.email;
+    const response = await this.users.enrollFace(email, faces);
+    return response;
+  }
+
+  /**
+   * Enroll student in modules and courses (separate from face enrollment)
+   */
+  @Post('/enroll-modules')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.STUDENT)
+  async enrollInModulesAndCourses(
+    @Body() payload: ModuleEnrollmentDto,
+    @Req() req: Request,
+  ) {
+    const email = (req.user as any)?.email;
+    const response = await this.users.enrollInModulesAndCourses(payload, email);
+    return response;
+  }
+
+  /**
+   * Update student enrollments (replace all modules and courses)
+   */
+  @Patch('/update-enrollments')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.STUDENT)
+  async updateStudentEnrollments(
+    @Body() payload: ModuleEnrollmentDto,
+    @Req() req: Request,
+  ) {
+    const adminEmail = (req.user as any)?.email;
+    const response = await this.users.updateStudentEnrollments(
+      payload,
+      adminEmail,
+    );
+    return response;
+  }
 
   @SkipThrottle({ default: false })
   @Post('/enroll')
@@ -116,17 +166,12 @@ export class UsersController {
   }
 
   @SkipThrottle({ default: false })
-  @Get('/assign-rep')
+  @Post('/assign-rep')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER)
-  async assignRep(
-    @Query('courseId') courseId: string,
-    @Query('studentId') studentId: string,
-    @Req() req: Request,
-  ) {
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
+  async assignRep(@Query('studentId') studentId: string, @Req() req: Request) {
     const email = (req.user as any)?.email;
-
-    const response = await this.users.assignRep(courseId, studentId, email);
+    const response = await this.users.assignRep(studentId, email);
     return response;
   }
 
@@ -156,18 +201,18 @@ export class UsersController {
   @Get('/fetch-reps')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER)
-  async fetchCourseReps(@Req() req: Request) {
+  async fetchReps(@Req() req: Request) {
     const email = (req.user as any)?.email;
-    const response = await this.users.fetchAllCourseReps(email);
+    const response = await this.users.fetchAllReps(email);
     return response;
   }
 
   @Get('/all-reps')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER, Role.STAFF)
-  async getAllCourseReps(@Req() req: Request) {
+  async getAllReps(@Req() req: Request) {
     const email = (req.user as any)?.email;
-    const response = await this.users.getCourseAllReps(email);
+    const response = await this.users.getAllReps(email);
     return response;
   }
 
@@ -191,19 +236,11 @@ export class UsersController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
   @Delete('remove/rep')
-  async removeCourseRep(
-    @Query('courseId') courseId: string,
-    @Query('studentId') studentId: string,
-    @Req() req: Request,
-  ) {
+  async removeRep(@Query('studentId') studentId: string, @Req() req: Request) {
     const email = (req.user as any)?.email;
-    const response = await this.users.removeCourseRep(
-      courseId,
-      studentId,
-      email,
-    );
+    const response = await this.users.removeRep(studentId, email);
     return response;
   }
 

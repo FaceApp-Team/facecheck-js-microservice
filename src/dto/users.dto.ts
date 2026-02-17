@@ -13,13 +13,12 @@ export class UsersDto {
   @IsNotEmpty()
   @IsEnum(Role)
   @ApiProperty({ enum: Role })
-  role: Role;
+  role!: Role;
 
   @IsString()
   @IsNotEmpty()
-  @ApiProperty({ example: 'johndoe' })
   @ApiProperty({ example: 'John Doe' })
-  fullName: string;
+  fullName!: string;
 
   @IsString()
   @IsOptional()
@@ -39,17 +38,17 @@ export class UsersDto {
   @IsString()
   @IsNotEmpty()
   @ApiProperty({ example: 'johndoe@gmail.com' })
-  email: string;
+  email!: string;
 
   @IsString()
   @IsNotEmpty()
   @ApiProperty({ example: '+1234567890' })
-  phone: string;
+  phone!: string;
 
   @IsString()
   @ApiProperty({ example: 'secureP@ss' })
   @IsNotEmpty()
-  password: string;
+  password!: string;
 
   @IsString()
   @ApiProperty({ example: 'STUDENT123' })
@@ -74,20 +73,39 @@ export class UsersDto {
   @IsEnum(AccountStatus)
   @IsOptional()
   @ApiProperty({ enum: AccountStatus, required: false })
-  status: AccountStatus;
+  status?: AccountStatus;
 
   @IsArray()
   @IsOptional()
   @ApiProperty({ example: ['COURSE123', 'COURSE456'], required: false })
   courses?: string[];
 
-  // @IsString()
-  // @IsOptional()
-  // @ApiProperty({ example: 'Computer Science', required: false })
-  // programOfStudy?: string;
+  @IsArray()
+  @IsOptional()
+  @ApiProperty({ example: ['MODULE123', 'MODULE456'], required: false })
+  modules?: string[];
 
   @IsString()
   @IsOptional()
   @ApiProperty({ example: '400 Level', required: false })
   level?: string;
+}
+
+export class FaceEnrollmentDto {
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty({ example: 'johndoe@gmail.com' })
+  email!: string;
+}
+
+export class ModuleEnrollmentDto {
+  @IsArray()
+  @IsNotEmpty()
+  @ApiProperty({ example: ['MODULE123', 'MODULE456'] })
+  modules!: string[];
+
+  @IsArray()
+  @IsOptional()
+  @ApiProperty({ example: ['COURSE123', 'COURSE456'], required: false })
+  courses?: string[];
 }

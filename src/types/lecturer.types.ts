@@ -6,5 +6,9 @@ export interface LecturerEarning {
   staffNo: string | null;
   hourlyRate: number;
   totalHours: number;
-  earnings: number;
+  grossEarnings?: number;
+  taxDeduction?: number;
+  taxRate?: number;
+  earnings: number; // Net earnings after tax
+  sessions?: { sessionId: string; sessionName: string; hours: number }[];
 }
