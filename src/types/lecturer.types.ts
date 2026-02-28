@@ -10,5 +10,23 @@ export interface LecturerEarning {
   taxDeduction?: number;
   taxRate?: number;
   earnings: number; // Net earnings after tax
-  sessions?: { sessionId: string; sessionName: string; hours: number }[];
+  sessions?: {
+    sessionId: string;
+    sessionName: string;
+    hours: number;
+    date?: Date;
+  }[];
+}
+
+export interface PayrollPeriod {
+  year?: number;
+  month?: number;
+  startDate: Date;
+  endDate: Date;
+}
+
+export interface PeriodPayrollResponse {
+  period: PayrollPeriod;
+  earnings?: LecturerEarning[];
+  payroll?: LecturerEarning;
 }

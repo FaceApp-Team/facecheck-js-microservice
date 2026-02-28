@@ -8,15 +8,13 @@ import { HealthJobs } from './health.jobs.service';
 import { NotificationJobs } from './notifications.jobs.service';
 import { PayrollJobs } from './payroll.jobs.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { HelpersService } from '../helpers/helpers.service';
-import { HttpModule } from '@nestjs/axios';
+import { HelpersModule } from '../helpers/helpers.module';
 
 @Module({
-  imports: [HttpModule],
+  imports: [HelpersModule],
   controllers: [],
   providers: [
     PrismaService,
-    HelpersService,
     AttendanceJobs,
     AuthJobs,
     SessionJobs,

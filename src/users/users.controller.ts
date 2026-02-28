@@ -13,7 +13,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
-import { UsersDto, ModuleEnrollmentDto } from '../dto/users.dto';
+import { UsersDto } from '../dto/users.dto';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Request } from 'express';
@@ -29,50 +29,24 @@ export class UsersController {
 
   /**
    * Separate face enrollment endpoint
+   * Students can also provide their studentId and level (year group)
    */
   @SkipThrottle({ default: false })
   @Post('/enroll-face')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.STUDENT, Role.LECTURER, Role.STAFF)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.STUDENT)
   @UseInterceptors(FilesInterceptor('faces'))
   async enrollFace(
     @UploadedFiles() faces: Express.Multer.File[],
+    @Body() body: { studentId?: string; level?: number },
     @Req() req: Request,
   ) {
     const email = (req.user as any)?.email;
-    const response = await this.users.enrollFace(email, faces);
-    return response;
-  }
-
-  /**
-   * Enroll student in modules and courses (separate from face enrollment)
-   */
-  @Post('/enroll-modules')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.STUDENT)
-  async enrollInModulesAndCourses(
-    @Body() payload: ModuleEnrollmentDto,
-    @Req() req: Request,
-  ) {
-    const email = (req.user as any)?.email;
-    const response = await this.users.enrollInModulesAndCourses(payload, email);
-    return response;
-  }
-
-  /**
-   * Update student enrollments (replace all modules and courses)
-   */
-  @Patch('/update-enrollments')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.STUDENT)
-  async updateStudentEnrollments(
-    @Body() payload: ModuleEnrollmentDto,
-    @Req() req: Request,
-  ) {
-    const adminEmail = (req.user as any)?.email;
-    const response = await this.users.updateStudentEnrollments(
-      payload,
-      adminEmail,
+    const response = await this.users.enrollFace(
+      email,
+      faces,
+      body.studentId,
+      body.level ? Number(body.level) : undefined,
     );
     return response;
   }
@@ -80,15 +54,15 @@ export class UsersController {
   @SkipThrottle({ default: false })
   @Post('/enroll')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.STUDENT)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
   @UseInterceptors(FilesInterceptor('faces'))
   async enrollUser(
     @Body() payload: Partial<UsersDto>,
     @UploadedFiles() faces: Express.Multer.File[],
     @Req() req: Request,
   ) {
-    const email = (req.user as any)?.email;
-    const response = await this.users.enrollUser(payload, faces, email);
+    const adminEmail = (req.user as any)?.email;
+    const response = await this.users.enrollUser(payload, faces, adminEmail);
     return response;
   }
 
@@ -132,7 +106,14 @@ export class UsersController {
   }
 
   @Patch('/update-records')
-  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.STUDENT)
+  @Roles(
+    Role.ADMIN,
+    Role.SYSTEM_ADMIN,
+    Role.STUDENT,
+    Role.LECTURER,
+    Role.REP,
+    Role.STAFF,
+  )
   @UseGuards(JwtAuthGuard, RolesGuard)
   async updateRecords(@Body() paylod: Partial<UsersDto>, @Req() req: Request) {
     const role = (req.user as any)?.role;
@@ -195,15 +176,6 @@ export class UsersController {
       payload.phone,
       email,
     );
-    return response;
-  }
-
-  @Get('/fetch-reps')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN, Role.LECTURER)
-  async fetchReps(@Req() req: Request) {
-    const email = (req.user as any)?.email;
-    const response = await this.users.fetchAllReps(email);
     return response;
   }
 

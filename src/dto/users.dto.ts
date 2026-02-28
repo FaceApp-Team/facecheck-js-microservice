@@ -96,16 +96,18 @@ export class FaceEnrollmentDto {
   @IsNotEmpty()
   @ApiProperty({ example: 'johndoe@gmail.com' })
   email!: string;
-}
 
-export class ModuleEnrollmentDto {
-  @IsArray()
-  @IsNotEmpty()
-  @ApiProperty({ example: ['MODULE123', 'MODULE456'] })
-  modules!: string[];
-
-  @IsArray()
+  @IsString()
   @IsOptional()
-  @ApiProperty({ example: ['COURSE123', 'COURSE456'], required: false })
-  courses?: string[];
+  @ApiProperty({ example: 'STUDENT123', required: false })
+  studentId?: string;
+
+  @IsNumber()
+  @IsOptional()
+  @ApiProperty({
+    example: 100,
+    description: 'Academic level (100-600)',
+    required: false,
+  })
+  level?: number;
 }

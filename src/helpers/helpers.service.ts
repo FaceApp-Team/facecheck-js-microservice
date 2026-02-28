@@ -195,6 +195,7 @@ export class HelpersService {
       );
 
       if (response.status !== 200) {
+        this.logger.error(response);
         this.logger.error(
           `SMS sending failed: ${JSON.stringify(response.data)}`,
         );
@@ -445,6 +446,48 @@ export class HelpersService {
 
     if (!hasOnlyAllowedKeys) {
       throw new BadRequestException('Upload contains invalid fields');
+    }
+  }
+
+  async deleteFaceEmbeddings(userId: string) {
+    if (!userId) {
+      throw new BadRequestException('User ID is required');
+    }
+
+    const env = this.config.get<string>('app.env');
+    const baseUrl =
+      env === 'production'
+        ? this.config.get<string>('face.prodDeletionUrl')
+        : this.config.get<string>('face.devDeletionUrl');
+
+    if (!baseUrl) {
+      throw new InternalServerErrorException(
+        'Face deletion endpoint is not configured',
+      );
+    }
+
+    const deleteEndpoint = `${baseUrl}/${userId}`;
+
+    try {
+      const response = await firstValueFrom(this.fetch.delete(deleteEndpoint));
+
+      if (response.status !== 200) {
+        this.logger.error(
+          `Face embeddings deletion failed: ${JSON.stringify(response.data)}`,
+        );
+        throw new InternalServerErrorException(
+          response.data?.message ||
+            'Face embeddings deletion failed. Try again later.',
+        );
+      }
+
+      this.logger.log(`Face embeddings deleted for user ${userId}`);
+      return response.data;
+    } catch (error: any) {
+      this.logger.error(`Face embeddings deletion error: ${error.message}`);
+      throw new InternalServerErrorException(
+        `Face embeddings deletion failed: ${error.message}`,
+      );
     }
   }
 

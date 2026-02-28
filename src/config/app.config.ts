@@ -7,7 +7,10 @@ export default () => ({
     secretCode: process.env.FACE_CHECK_SECRET_CODE || '',
     prodUrl: process.env.APP_PROD_URL || 'http://localhost:3000',
     devUrl: process.env.APP_DEV_URL || 'http://localhost:3000',
-    clientKioskUrl: process.env.KIOSK_MODE_URL || 'http://localhost:3000/kiosk',
+    clientKioskUrl:
+      process.env.KIOSK_MODE_URL || 'https://face.comas.edu.gh/kiosk',
+    devClientKioskUrl:
+      process.env.DEV_KIOSK_MODE_URL || 'http://localhost:5175/kiosk',
   },
   jwt: {
     secret: process.env.JWT_SECRET || '',
@@ -38,6 +41,8 @@ export default () => ({
     minConfidenceThreshold:
       parseFloat(process.env.MIN_CONFIDENCE_THRESHOLD || '0.6') || 0.6,
     recognizeUrl: process.env.FACE_RECOGNITION_ENDPOINT || '',
+    prodDeletionUrl: process.env.PROD_FACE_DELETION_ENDPOINT || '',
+    devDeletionUrl: process.env.DEVELOPMENT_FACE_DELETION_ENDPOINT || '',
   },
   supabase: {
     url: process.env.SUPABASE_URL || '',

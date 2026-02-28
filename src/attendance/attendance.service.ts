@@ -19,10 +19,39 @@ export class AttendanceService {
     private readonly helper: HelpersService,
   ) {}
 
+  /**
+   * Calculate the distance between two coordinates using Haversine formula
+   * @returns Distance in meters
+   */
+  private calculateDistance(
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number,
+  ): number {
+    const R = 6371000; // Earth's radius in meters
+    const dLat = this.toRadians(lat2 - lat1);
+    const dLon = this.toRadians(lon2 - lon1);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(this.toRadians(lat1)) *
+        Math.cos(this.toRadians(lat2)) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  private toRadians(degrees: number): number {
+    return degrees * (Math.PI / 180);
+  }
+
   async markAttendance(
     sessionId: string,
     face: Express.Multer.File,
     source: string,
+    userLatitude?: number,
+    userLongitude?: number,
   ) {
     const session = await this.prisma.session.findUnique({
       where: { id: sessionId },
@@ -35,7 +64,18 @@ export class AttendanceService {
         mode: true,
         status: true,
         courseId: true,
+        latitude: true,
+        longitude: true,
+        geofenceRadius: true,
         createdBy: { select: { id: true } },
+        subtopic: {
+          select: {
+            id: true,
+            name: true,
+            lecturerId: true,
+            module: { select: { id: true, level: true, name: true } },
+          },
+        },
       },
     });
 
@@ -45,6 +85,32 @@ export class AttendanceService {
 
     if (session.status !== SessionStatus.OPEN) {
       throw new ForbiddenException('Session is not open for attendance');
+    }
+
+    // Geofencing check - if session has location set, verify user is within range
+    if (
+      session.latitude != null &&
+      session.longitude != null &&
+      session.geofenceRadius != null
+    ) {
+      if (userLatitude == null || userLongitude == null) {
+        throw new ForbiddenException(
+          'Location is required to mark attendance for this session. Please enable location services.',
+        );
+      }
+
+      const distanceFromSession = this.calculateDistance(
+        session.latitude,
+        session.longitude,
+        userLatitude,
+        userLongitude,
+      );
+
+      if (distanceFromSession > session.geofenceRadius) {
+        throw new ForbiddenException(
+          `You are ${Math.round(distanceFromSession)}m away from the classroom. You must be within ${session.geofenceRadius}m to mark attendance.`,
+        );
+      }
     }
 
     this.helper.checkFileSize(face);
@@ -59,9 +125,9 @@ export class AttendanceService {
       : null;
 
     // Only allow attendance if now is between session start and end (UTC)
-    if (nowUtc < sessionStartUtc || (sessionEndUtc && nowUtc > sessionEndUtc)) {
-      throw new ForbiddenException('Session is not active now');
-    }
+    // if (nowUtc < sessionStartUtc || (sessionEndUtc && nowUtc > sessionEndUtc)) {
+    //   throw new ForbiddenException('Session is not active now');
+    // }
 
     //upload face image to cloud storage
     const imageUrl = await this.helper.uploadImage(face);
@@ -115,25 +181,49 @@ export class AttendanceService {
       throw new NotFoundException('User not found');
     }
 
-    // if (session.createdBy.id === getRecognition.user_id) {
-    //   throw new ForbiddenException('Session creator cannot mark attendance');
-    // }
-
     if (!user.student && !user.lecturer) {
       throw new ForbiddenException('User is not a student or lecturer');
     }
 
-    if (user.student) {
-      if (
-        !user.student.enrollments.some(
-          (enr) => enr.courseId === session.courseId,
-        )
-      ) {
-        throw new ForbiddenException('User not enrolled for this course');
+    // Validate student level matches module level
+    if (user.student && session.subtopic?.module) {
+      const moduleLevel = session.subtopic.module.level;
+      const studentLevel = user.student.level;
+      if (studentLevel !== moduleLevel) {
+        throw new ForbiddenException(
+          `Your level (${studentLevel}) does not match the module level (${moduleLevel}). You cannot mark attendance for this session.`,
+        );
+      }
+    }
+
+    // Validate lecturer is assigned to the subtopic
+    if (user.lecturer && session.subtopic) {
+      if (session.subtopic.lecturerId !== user.id) {
+        throw new ForbiddenException(
+          'You are not assigned to this subtopic. Only the assigned lecturer can mark attendance.',
+        );
       }
     }
 
     //update the user attendance for the session
+    // Calculate distance for storing in attendance record
+    let distanceFromSession: number | null = null;
+    let withinGeofence = true;
+    if (
+      session.latitude != null &&
+      session.longitude != null &&
+      userLatitude != null &&
+      userLongitude != null
+    ) {
+      distanceFromSession = this.calculateDistance(
+        session.latitude,
+        session.longitude,
+        userLatitude,
+        userLongitude,
+      );
+      withinGeofence = distanceFromSession <= (session.geofenceRadius ?? 100);
+    }
+
     if (session.mode === SessionMode.CHECK_IN) {
       const existing = await this.prisma.attendance.findUnique({
         where: {
@@ -162,6 +252,10 @@ export class AttendanceService {
         update: {
           confidence: getRecognition.confidence,
           source,
+          latitude: userLatitude,
+          longitude: userLongitude,
+          distanceFromSession,
+          withinGeofence,
         },
         create: {
           sessionId: session.id,
@@ -174,6 +268,10 @@ export class AttendanceService {
           confidence: getRecognition.confidence,
           source,
           checkInTime: nowUtc,
+          latitude: userLatitude,
+          longitude: userLongitude,
+          distanceFromSession,
+          withinGeofence,
         },
       });
 
@@ -229,7 +327,7 @@ export class AttendanceService {
       const attendance = await this.prisma.attendance.update({
         where: { id: existing.id },
         data: {
-          checkOutTime: sessionEndUtc ? sessionEndUtc : nowUtc,
+          checkOutTime: nowUtc,
           confidence: getRecognition.confidence,
           status: finalStatus,
           source,
@@ -248,7 +346,7 @@ export class AttendanceService {
         `User ${user.email} checked out of session ${session.id} at ${new Date().toISOString()}`,
         Priority.MEDIUM,
       );
-      return attendance;
+      return { attendance, score: getRecognition.score };
     }
   }
 
@@ -367,14 +465,12 @@ export class AttendanceService {
 
     const session = await this.prisma.session.findUnique({
       where: { id: sessionId },
-      select: {
-        id: true,
-        startTime: true,
-        endTime: true,
-        status: true,
-        courseId: true,
-        moduleId: true,
+      include: {
         course: { select: { moduleId: true } },
+        module: { select: { id: true, level: true, name: true } },
+        subtopic: {
+          include: { lecturer: true },
+        },
       },
     });
 
@@ -391,10 +487,16 @@ export class AttendanceService {
       );
     }
 
+    if (session.status !== SessionStatus.OPEN) {
+      throw new ForbiddenException(
+        'Session is closed for attendance. You can only mark manual attendance for open sessions',
+      );
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: {
-        student: { include: { enrollments: true, moduleEnrollments: true } },
+        student: { include: { enrollments: true } },
         lecturer: true,
       },
     });
@@ -405,23 +507,29 @@ export class AttendanceService {
 
     // Verify user is enrolled in the course/module or is a lecturer
     if (user.student) {
-      const isEnrolledInCourse = user.student.enrollments.some(
-        (enr) => enr.courseId === session.courseId,
-      );
-      const isEnrolledInModule = session.moduleId
-        ? user.student.moduleEnrollments?.some(
-            (enr) => enr.moduleId === session.moduleId,
-          )
-        : session.course?.moduleId
-          ? user.student.moduleEnrollments?.some(
-              (enr) => enr.moduleId === session.course?.moduleId,
-            )
-          : false;
-
-      if (!isEnrolledInCourse && !isEnrolledInModule) {
-        throw new ForbiddenException(
-          'Student not enrolled in this course or module',
+      if (session.courseId) {
+        // Course-based session: check course enrollment
+        const isEnrolledInCourse = user.student.enrollments.some(
+          (enr) => enr.courseId === session.courseId,
         );
+
+        if (!isEnrolledInCourse) {
+          throw new ForbiddenException('Student not enrolled in this course');
+        }
+      } else if (session.moduleId && session.module) {
+        // Module-based session (rep-started): check student level matches module level
+        if (user.student.level !== session.module.level) {
+          throw new ForbiddenException(
+            `Student level ${user.student.level} does not match module level ${session.module.level}`,
+          );
+        }
+      }
+    }
+
+    // Lecturer validation: check if assigned to subtopic
+    if (user.lecturer && session.subtopic) {
+      if (session.subtopic.lecturerId !== user.id) {
+        throw new ForbiddenException('Lecturer not assigned to this subtopic');
       }
     }
 

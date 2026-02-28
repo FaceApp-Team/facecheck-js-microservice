@@ -120,17 +120,6 @@ export class CoursesService {
             sessions: true,
           },
         },
-        enrollments: {
-          include: {
-            student: {
-              include: {
-                user: {
-                  select: { id: true, name: true, email: true },
-                },
-              },
-            },
-          },
-        },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -163,17 +152,6 @@ export class CoursesService {
               },
             },
             enrollments: true,
-          },
-        },
-        enrollments: {
-          include: {
-            student: {
-              include: {
-                user: {
-                  select: { id: true, name: true, email: true },
-                },
-              },
-            },
           },
         },
       },

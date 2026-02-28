@@ -225,4 +225,330 @@ export class PayrollService {
 
     return this.getLecturerPayroll(lecturer.id);
   }
+
+  /**
+   * Get the start and end dates for a given month/year period
+   */
+  private getPeriodDates(
+    year: number,
+    month: number,
+  ): { start: Date; end: Date } {
+    const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
+    const end = new Date(year, month, 0, 23, 59, 59, 999); // Last day of month
+    return { start, end };
+  }
+
+  /**
+   * Get all lecturers' earnings for a specific period (month/year)
+   */
+  async getLecturerEarningsByPeriod(
+    year: number,
+    month: number,
+  ): Promise<{
+    period: { year: number; month: number; startDate: Date; endDate: Date };
+    earnings: LecturerEarning[];
+  }> {
+    const { start, end } = this.getPeriodDates(year, month);
+
+    const lecturers = await this.prisma.lecturer.findMany({
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    const earnings: LecturerEarning[] = [];
+
+    for (const lecturer of lecturers) {
+      const attendances = await this.prisma.attendance.findMany({
+        where: {
+          userId: lecturer.userId,
+          checkOutTime: { gte: start, lte: end },
+          checkInTime: { not: null },
+        },
+        select: {
+          checkInTime: true,
+          checkOutTime: true,
+        },
+      });
+
+      let totalHours = 0;
+      for (const attendance of attendances) {
+        if (attendance.checkInTime && attendance.checkOutTime) {
+          const checkIn = new Date(attendance.checkInTime);
+          const checkOut = new Date(attendance.checkOutTime);
+          const hours =
+            (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
+          totalHours += hours;
+        }
+      }
+
+      const hourlyRate = lecturer.hourlyRate ?? 0;
+      const grossEarnings = totalHours * hourlyRate;
+      const taxDeduction = grossEarnings * this.TAX_RATE;
+      const netEarnings = grossEarnings - taxDeduction;
+
+      earnings.push({
+        lecturerId: lecturer.id,
+        name: lecturer.user.name,
+        email: lecturer.user.email,
+        staffNo: lecturer.staffNo,
+        hourlyRate,
+        totalHours: Math.round(totalHours * 100) / 100,
+        grossEarnings: Math.round(grossEarnings * 100) / 100,
+        taxDeduction: Math.round(taxDeduction * 100) / 100,
+        taxRate: this.TAX_RATE,
+        earnings: Math.round(netEarnings * 100) / 100,
+      });
+    }
+
+    return {
+      period: {
+        year,
+        month,
+        startDate: start,
+        endDate: end,
+      },
+      earnings,
+    };
+  }
+
+  /**
+   * Get individual lecturer's payroll for a specific period (month/year)
+   */
+  async getLecturerPayrollByPeriod(
+    lecturerId: string,
+    year: number,
+    month: number,
+  ): Promise<{
+    period: { year: number; month: number; startDate: Date; endDate: Date };
+    payroll: LecturerEarning;
+  } | null> {
+    const { start, end } = this.getPeriodDates(year, month);
+
+    const lecturer = await this.prisma.lecturer.findUnique({
+      where: { id: lecturerId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    if (!lecturer) {
+      return null;
+    }
+
+    const attendances = await this.prisma.attendance.findMany({
+      where: {
+        userId: lecturer.userId,
+        checkOutTime: { not: null },
+        checkInTime: {
+          gte: start,
+          lte: end,
+        },
+      },
+      select: {
+        id: true,
+        checkInTime: true,
+        checkOutTime: true,
+        session: {
+          select: {
+            id: true,
+            name: true,
+            courseId: true,
+            moduleId: true,
+          },
+        },
+      },
+    });
+
+    let totalHours = 0;
+    const sessions: {
+      sessionId: string;
+      sessionName: string;
+      hours: number;
+      date: Date;
+    }[] = [];
+
+    for (const attendance of attendances) {
+      if (attendance.checkInTime && attendance.checkOutTime) {
+        const checkIn = new Date(attendance.checkInTime);
+        const checkOut = new Date(attendance.checkOutTime);
+        const hours =
+          (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
+        totalHours += hours;
+
+        sessions.push({
+          sessionId: attendance.session.id,
+          sessionName: attendance.session.name,
+          hours: Math.round(hours * 100) / 100,
+          date: checkIn,
+        });
+      }
+    }
+
+    const hourlyRate = lecturer.hourlyRate ?? 0;
+    const grossEarnings = totalHours * hourlyRate;
+    const taxDeduction = grossEarnings * this.TAX_RATE;
+    const netEarnings = grossEarnings - taxDeduction;
+
+    return {
+      period: {
+        year,
+        month,
+        startDate: start,
+        endDate: end,
+      },
+      payroll: {
+        lecturerId: lecturer.id,
+        name: lecturer.user.name,
+        email: lecturer.user.email,
+        staffNo: lecturer.staffNo,
+        hourlyRate,
+        totalHours: Math.round(totalHours * 100) / 100,
+        grossEarnings: Math.round(grossEarnings * 100) / 100,
+        taxDeduction: Math.round(taxDeduction * 100) / 100,
+        taxRate: this.TAX_RATE,
+        earnings: Math.round(netEarnings * 100) / 100,
+        sessions,
+      },
+    };
+  }
+
+  /**
+   * Get payroll for a custom date range
+   */
+  async getLecturerPayrollByDateRange(
+    lecturerId: string,
+    startDate: Date,
+    endDate: Date,
+  ): Promise<{
+    period: { startDate: Date; endDate: Date };
+    payroll: LecturerEarning;
+  } | null> {
+    const lecturer = await this.prisma.lecturer.findUnique({
+      where: { id: lecturerId },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    if (!lecturer) {
+      return null;
+    }
+
+    const attendances = await this.prisma.attendance.findMany({
+      where: {
+        userId: lecturer.userId,
+        checkOutTime: { not: null },
+        checkInTime: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+      select: {
+        id: true,
+        checkInTime: true,
+        checkOutTime: true,
+        session: {
+          select: {
+            id: true,
+            name: true,
+            courseId: true,
+            moduleId: true,
+          },
+        },
+      },
+    });
+
+    let totalHours = 0;
+    const sessions: {
+      sessionId: string;
+      sessionName: string;
+      hours: number;
+      date: Date;
+    }[] = [];
+
+    for (const attendance of attendances) {
+      if (attendance.checkInTime && attendance.checkOutTime) {
+        const checkIn = new Date(attendance.checkInTime);
+        const checkOut = new Date(attendance.checkOutTime);
+        const hours =
+          (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
+        totalHours += hours;
+
+        sessions.push({
+          sessionId: attendance.session.id,
+          sessionName: attendance.session.name,
+          hours: Math.round(hours * 100) / 100,
+          date: checkIn,
+        });
+      }
+    }
+
+    const hourlyRate = lecturer.hourlyRate ?? 0;
+    const grossEarnings = totalHours * hourlyRate;
+    const taxDeduction = grossEarnings * this.TAX_RATE;
+    const netEarnings = grossEarnings - taxDeduction;
+
+    return {
+      period: {
+        startDate,
+        endDate,
+      },
+      payroll: {
+        lecturerId: lecturer.id,
+        name: lecturer.user.name,
+        email: lecturer.user.email,
+        staffNo: lecturer.staffNo,
+        hourlyRate,
+        totalHours: Math.round(totalHours * 100) / 100,
+        grossEarnings: Math.round(grossEarnings * 100) / 100,
+        taxDeduction: Math.round(taxDeduction * 100) / 100,
+        taxRate: this.TAX_RATE,
+        earnings: Math.round(netEarnings * 100) / 100,
+        sessions,
+      },
+    };
+  }
+
+  /**
+   * Get payroll by email for a specific period
+   */
+  async getLecturerPayrollByEmailAndPeriod(
+    email: string,
+    year: number,
+    month: number,
+  ): Promise<{
+    period: { year: number; month: number; startDate: Date; endDate: Date };
+    payroll: LecturerEarning;
+  } | null> {
+    const user = await this.helper.getUser(email);
+
+    const lecturer = await this.prisma.lecturer.findUnique({
+      where: { userId: user.id },
+    });
+
+    if (!lecturer) {
+      throw new BadRequestException('User is not a lecturer');
+    }
+
+    return this.getLecturerPayrollByPeriod(lecturer.id, year, month);
+  }
 }

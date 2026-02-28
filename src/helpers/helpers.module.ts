@@ -26,5 +26,6 @@ import { HttpModule } from '@nestjs/axios';
   ],
   controllers: [],
   providers: [HelpersService, PrismaService, ConfigService],
+  exports: [HelpersService],
 })
 export class HelpersModule {}

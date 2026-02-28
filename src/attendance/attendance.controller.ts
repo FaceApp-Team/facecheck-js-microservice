@@ -33,12 +33,18 @@ export class AttendanceController {
   async markAttendance(
     @Query('source') source: string,
     @Query('sessionId') sessionId: string,
+    @Query('latitude') latitude: string,
+    @Query('longitude') longitude: string,
     @UploadedFile() face: Express.Multer.File,
   ) {
+    const lat = latitude ? parseFloat(latitude) : undefined;
+    const lon = longitude ? parseFloat(longitude) : undefined;
     const response = await this.attendance.markAttendance(
       sessionId,
       face,
       source,
+      lat,
+      lon,
     );
     return response;
   }
