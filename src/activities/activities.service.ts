@@ -929,7 +929,10 @@ export class ActivitiesService {
    * Check if user has admin access
    */
   private checkAdminAccess(role: Role | undefined) {
-    if (!role || (role !== Role.ADMIN && role !== Role.SYSTEM_ADMIN)) {
+    if (
+      !role ||
+      (role !== Role.ADMIN && role !== Role.SYSTEM_ADMIN && role !== Role.REP)
+    ) {
       throw new ForbiddenException('Access denied. Admin privileges required.');
     }
   }
