@@ -221,7 +221,7 @@ export class AttendanceService {
         userLatitude,
         userLongitude,
       );
-      withinGeofence = distanceFromSession <= (session.geofenceRadius ?? 100);
+      withinGeofence = distanceFromSession <= (session.geofenceRadius ?? 10);
     }
 
     if (session.mode === SessionMode.CHECK_IN) {
@@ -252,6 +252,7 @@ export class AttendanceService {
         update: {
           confidence: getRecognition.confidence,
           source,
+          checkInTime: nowUtc,
           latitude: userLatitude,
           longitude: userLongitude,
           distanceFromSession,
@@ -303,6 +304,12 @@ export class AttendanceService {
         throw new ForbiddenException('User has not checked in');
       }
 
+      if (!existing.checkInTime) {
+        throw new ForbiddenException(
+          'Check-in time is missing for this record',
+        );
+      }
+
       if (existing.checkOutTime && session.mode === SessionMode.CHECK_OUT) {
         throw new ForbiddenException('User has already checked out');
       }
@@ -311,7 +318,7 @@ export class AttendanceService {
       if (!user.lecturer) {
         const MIN_STAY_MINUTES = 30;
         const stayedMinutes =
-          (nowUtc.getTime() - existing.checkInTime!.getTime()) / 60000;
+          (nowUtc.getTime() - existing.checkInTime.getTime()) / 60000;
 
         if (stayedMinutes < MIN_STAY_MINUTES) {
           throw new ForbiddenException('Minimum attendance duration not met');

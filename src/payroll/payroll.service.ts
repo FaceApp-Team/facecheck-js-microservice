@@ -6,16 +6,110 @@ import { firstValueFrom } from 'rxjs';
 import { HttpService } from '@nestjs/axios';
 import { AxiosResponse } from 'axios';
 import { LecturerEarning } from '../types/lecturer.types';
-// import { AttendanceStatus, Role } from '../../generated/prisma/enums';
 
 @Injectable()
 export class PayrollService {
   logger = new Logger(PayrollService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private helper: HelpersService,
     private readonly httpService: HttpService,
   ) {}
+
+  private readonly TAX_RATE = 0.1; // 10% tax deduction
+
+  private toHours(milliseconds: number): number {
+    return milliseconds / (1000 * 60 * 60);
+  }
+
+  private roundHours(value: number): number {
+    return Math.round(value * 100) / 100;
+  }
+
+  private getAttendanceHourBreakdown(attendance: {
+    checkInTime: Date | null;
+    checkOutTime: Date | null;
+    session?: { startTime: Date; endTime: Date } | null;
+  }): {
+    totalWorkedHours: number;
+    regularHours: number;
+    overtimeHours: number;
+  } {
+    if (!attendance.checkInTime || !attendance.checkOutTime) {
+      return {
+        totalWorkedHours: 0,
+        regularHours: 0,
+        overtimeHours: 0,
+      };
+    }
+
+    const actualStart = new Date(attendance.checkInTime).getTime();
+    const actualEnd = new Date(attendance.checkOutTime).getTime();
+
+    if (actualEnd <= actualStart) {
+      return {
+        totalWorkedHours: 0,
+        regularHours: 0,
+        overtimeHours: 0,
+      };
+    }
+
+    const actualMillis = actualEnd - actualStart;
+    const totalWorkedHours = this.toHours(actualMillis);
+
+    if (!attendance.session) {
+      return {
+        totalWorkedHours,
+        regularHours: totalWorkedHours,
+        overtimeHours: 0,
+      };
+    }
+
+    const sessionStart = new Date(attendance.session.startTime).getTime();
+    const sessionEnd = new Date(attendance.session.endTime).getTime();
+    const overlapStart = Math.max(actualStart, sessionStart);
+    const overlapEnd = Math.min(actualEnd, sessionEnd);
+    const overlapMillis = Math.max(0, overlapEnd - overlapStart);
+    const regularHours = this.toHours(overlapMillis);
+    const overtimeHours = Math.max(0, totalWorkedHours - regularHours);
+
+    return {
+      totalWorkedHours,
+      regularHours,
+      overtimeHours,
+    };
+  }
+
+  private getEarningsBreakdown(
+    regularHours: number,
+    overtimeHours: number,
+    hourlyRate: number,
+  ): {
+    overtimeRate: number;
+    regularEarnings: number;
+    overtimeEarnings: number;
+    grossEarnings: number;
+    taxDeduction: number;
+    netEarnings: number;
+  } {
+    // Overtime is tracked separately but paid at the same base hourly rate.
+    const overtimeRate = hourlyRate;
+    const regularEarnings = regularHours * hourlyRate;
+    const overtimeEarnings = overtimeHours * overtimeRate;
+    const grossEarnings = regularEarnings + overtimeEarnings;
+    const taxDeduction = grossEarnings * this.TAX_RATE;
+    const netEarnings = grossEarnings - taxDeduction;
+
+    return {
+      overtimeRate,
+      regularEarnings,
+      overtimeEarnings,
+      grossEarnings,
+      taxDeduction,
+      netEarnings,
+    };
+  }
 
   async createTransferRecipient(
     payload: TransferRecipientDto,
@@ -52,12 +146,7 @@ export class PayrollService {
     }
   }
 
-  // Backend: src/payroll/payroll.service.ts
-
-  private readonly TAX_RATE = 0.1; // 10% tax deduction
-
   async getLecturerEarnings(): Promise<LecturerEarning[]> {
-    // Get all lecturers with their user info
     const lecturers = await this.prisma.lecturer.findMany({
       include: {
         user: {
@@ -73,55 +162,63 @@ export class PayrollService {
     const result: LecturerEarning[] = [];
 
     for (const lecturer of lecturers) {
-      // Get attendance records FOR the lecturer's user (where they attended sessions)
       const attendances = await this.prisma.attendance.findMany({
         where: {
-          userId: lecturer.userId, // Lecturer's user ID for attendance
-          checkOutTime: { not: null }, // Only completed attendances
+          userId: lecturer.userId,
+          checkOutTime: { not: null },
         },
         select: {
           checkInTime: true,
           checkOutTime: true,
+          session: {
+            select: {
+              startTime: true,
+              endTime: true,
+            },
+          },
         },
       });
 
-      // Calculate total hours from their attendance
       let totalHours = 0;
+      let regularHours = 0;
+      let overtimeHours = 0;
+
       for (const attendance of attendances) {
-        if (attendance.checkInTime && attendance.checkOutTime) {
-          const checkIn = new Date(attendance.checkInTime);
-          const checkOut = new Date(attendance.checkOutTime);
-          const hours =
-            (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
-          totalHours += hours;
-        }
+        const breakdown = this.getAttendanceHourBreakdown(attendance);
+        totalHours += breakdown.totalWorkedHours;
+        regularHours += breakdown.regularHours;
+        overtimeHours += breakdown.overtimeHours;
       }
 
       const hourlyRate = lecturer.hourlyRate ?? 0;
-      const grossEarnings = totalHours * hourlyRate;
-      const taxDeduction = grossEarnings * this.TAX_RATE;
-      const netEarnings = grossEarnings - taxDeduction;
+      const earningsBreakdown = this.getEarningsBreakdown(
+        regularHours,
+        overtimeHours,
+        hourlyRate,
+      );
 
       result.push({
         lecturerId: lecturer.id,
         name: lecturer.user.name,
         email: lecturer.user.email,
-        staffNo: lecturer.staffNo, // Now correctly from Lecturer model
+        staffNo: lecturer.staffNo,
         hourlyRate,
-        totalHours: Math.round(totalHours * 100) / 100,
-        grossEarnings: Math.round(grossEarnings * 100) / 100,
-        taxDeduction: Math.round(taxDeduction * 100) / 100,
+        totalHours: this.roundHours(totalHours),
+        regularHours: this.roundHours(regularHours),
+        overtimeHours: this.roundHours(overtimeHours),
+        overtimeRate: this.roundHours(earningsBreakdown.overtimeRate),
+        regularEarnings: this.roundHours(earningsBreakdown.regularEarnings),
+        overtimeEarnings: this.roundHours(earningsBreakdown.overtimeEarnings),
+        grossEarnings: this.roundHours(earningsBreakdown.grossEarnings),
+        taxDeduction: this.roundHours(earningsBreakdown.taxDeduction),
         taxRate: this.TAX_RATE,
-        earnings: Math.round(netEarnings * 100) / 100, // Net earnings after tax
+        earnings: this.roundHours(earningsBreakdown.netEarnings),
       });
     }
 
     return result;
   }
 
-  /**
-   * Get individual lecturer's payroll record
-   */
   async getLecturerPayroll(
     lecturerId: string,
   ): Promise<LecturerEarning | null> {
@@ -142,7 +239,6 @@ export class PayrollService {
       return null;
     }
 
-    // Get attendance records FOR the lecturer's user
     const attendances = await this.prisma.attendance.findMany({
       where: {
         userId: lecturer.userId,
@@ -158,39 +254,49 @@ export class PayrollService {
             name: true,
             courseId: true,
             moduleId: true,
+            startTime: true,
+            endTime: true,
           },
         },
       },
     });
 
-    // Calculate total hours from their attendance
     let totalHours = 0;
+    let regularHours = 0;
+    let overtimeHours = 0;
+
     const sessions: {
       sessionId: string;
       sessionName: string;
       hours: number;
+      regularHours: number;
+      overtimeHours: number;
+      date?: Date;
     }[] = [];
 
     for (const attendance of attendances) {
       if (attendance.checkInTime && attendance.checkOutTime) {
-        const checkIn = new Date(attendance.checkInTime);
-        const checkOut = new Date(attendance.checkOutTime);
-        const hours =
-          (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
-        totalHours += hours;
+        const breakdown = this.getAttendanceHourBreakdown(attendance);
+        totalHours += breakdown.totalWorkedHours;
+        regularHours += breakdown.regularHours;
+        overtimeHours += breakdown.overtimeHours;
 
         sessions.push({
           sessionId: attendance.session.id,
           sessionName: attendance.session.name,
-          hours: Math.round(hours * 100) / 100,
+          hours: this.roundHours(breakdown.totalWorkedHours),
+          regularHours: this.roundHours(breakdown.regularHours),
+          overtimeHours: this.roundHours(breakdown.overtimeHours),
         });
       }
     }
 
     const hourlyRate = lecturer.hourlyRate ?? 0;
-    const grossEarnings = totalHours * hourlyRate;
-    const taxDeduction = grossEarnings * this.TAX_RATE;
-    const netEarnings = grossEarnings - taxDeduction;
+    const earningsBreakdown = this.getEarningsBreakdown(
+      regularHours,
+      overtimeHours,
+      hourlyRate,
+    );
 
     return {
       lecturerId: lecturer.id,
@@ -198,18 +304,20 @@ export class PayrollService {
       email: lecturer.user.email,
       staffNo: lecturer.staffNo,
       hourlyRate,
-      totalHours: Math.round(totalHours * 100) / 100,
-      grossEarnings: Math.round(grossEarnings * 100) / 100,
-      taxDeduction: Math.round(taxDeduction * 100) / 100,
+      totalHours: this.roundHours(totalHours),
+      regularHours: this.roundHours(regularHours),
+      overtimeHours: this.roundHours(overtimeHours),
+      overtimeRate: this.roundHours(earningsBreakdown.overtimeRate),
+      regularEarnings: this.roundHours(earningsBreakdown.regularEarnings),
+      overtimeEarnings: this.roundHours(earningsBreakdown.overtimeEarnings),
+      grossEarnings: this.roundHours(earningsBreakdown.grossEarnings),
+      taxDeduction: this.roundHours(earningsBreakdown.taxDeduction),
       taxRate: this.TAX_RATE,
-      earnings: Math.round(netEarnings * 100) / 100,
+      earnings: this.roundHours(earningsBreakdown.netEarnings),
       sessions,
     };
   }
 
-  /**
-   * Get payroll for a lecturer by their email
-   */
   async getLecturerPayrollByEmail(
     email: string,
   ): Promise<LecturerEarning | null> {
@@ -226,21 +334,15 @@ export class PayrollService {
     return this.getLecturerPayroll(lecturer.id);
   }
 
-  /**
-   * Get the start and end dates for a given month/year period
-   */
   private getPeriodDates(
     year: number,
     month: number,
   ): { start: Date; end: Date } {
     const start = new Date(year, month - 1, 1, 0, 0, 0, 0);
-    const end = new Date(year, month, 0, 23, 59, 59, 999); // Last day of month
+    const end = new Date(year, month, 0, 23, 59, 59, 999);
     return { start, end };
   }
 
-  /**
-   * Get all lecturers' earnings for a specific period (month/year)
-   */
   async getLecturerEarningsByPeriod(
     year: number,
     month: number,
@@ -274,24 +376,32 @@ export class PayrollService {
         select: {
           checkInTime: true,
           checkOutTime: true,
+          session: {
+            select: {
+              startTime: true,
+              endTime: true,
+            },
+          },
         },
       });
 
       let totalHours = 0;
+      let regularHours = 0;
+      let overtimeHours = 0;
+
       for (const attendance of attendances) {
-        if (attendance.checkInTime && attendance.checkOutTime) {
-          const checkIn = new Date(attendance.checkInTime);
-          const checkOut = new Date(attendance.checkOutTime);
-          const hours =
-            (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
-          totalHours += hours;
-        }
+        const breakdown = this.getAttendanceHourBreakdown(attendance);
+        totalHours += breakdown.totalWorkedHours;
+        regularHours += breakdown.regularHours;
+        overtimeHours += breakdown.overtimeHours;
       }
 
       const hourlyRate = lecturer.hourlyRate ?? 0;
-      const grossEarnings = totalHours * hourlyRate;
-      const taxDeduction = grossEarnings * this.TAX_RATE;
-      const netEarnings = grossEarnings - taxDeduction;
+      const earningsBreakdown = this.getEarningsBreakdown(
+        regularHours,
+        overtimeHours,
+        hourlyRate,
+      );
 
       earnings.push({
         lecturerId: lecturer.id,
@@ -299,11 +409,16 @@ export class PayrollService {
         email: lecturer.user.email,
         staffNo: lecturer.staffNo,
         hourlyRate,
-        totalHours: Math.round(totalHours * 100) / 100,
-        grossEarnings: Math.round(grossEarnings * 100) / 100,
-        taxDeduction: Math.round(taxDeduction * 100) / 100,
+        totalHours: this.roundHours(totalHours),
+        regularHours: this.roundHours(regularHours),
+        overtimeHours: this.roundHours(overtimeHours),
+        overtimeRate: this.roundHours(earningsBreakdown.overtimeRate),
+        regularEarnings: this.roundHours(earningsBreakdown.regularEarnings),
+        overtimeEarnings: this.roundHours(earningsBreakdown.overtimeEarnings),
+        grossEarnings: this.roundHours(earningsBreakdown.grossEarnings),
+        taxDeduction: this.roundHours(earningsBreakdown.taxDeduction),
         taxRate: this.TAX_RATE,
-        earnings: Math.round(netEarnings * 100) / 100,
+        earnings: this.roundHours(earningsBreakdown.netEarnings),
       });
     }
 
@@ -318,9 +433,6 @@ export class PayrollService {
     };
   }
 
-  /**
-   * Get individual lecturer's payroll for a specific period (month/year)
-   */
   async getLecturerPayrollByPeriod(
     lecturerId: string,
     year: number,
@@ -367,40 +479,50 @@ export class PayrollService {
             name: true,
             courseId: true,
             moduleId: true,
+            startTime: true,
+            endTime: true,
           },
         },
       },
     });
 
     let totalHours = 0;
+    let regularHours = 0;
+    let overtimeHours = 0;
+
     const sessions: {
       sessionId: string;
       sessionName: string;
       hours: number;
+      regularHours: number;
+      overtimeHours: number;
       date: Date;
     }[] = [];
 
     for (const attendance of attendances) {
       if (attendance.checkInTime && attendance.checkOutTime) {
-        const checkIn = new Date(attendance.checkInTime);
-        const checkOut = new Date(attendance.checkOutTime);
-        const hours =
-          (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
-        totalHours += hours;
+        const breakdown = this.getAttendanceHourBreakdown(attendance);
+        totalHours += breakdown.totalWorkedHours;
+        regularHours += breakdown.regularHours;
+        overtimeHours += breakdown.overtimeHours;
 
         sessions.push({
           sessionId: attendance.session.id,
           sessionName: attendance.session.name,
-          hours: Math.round(hours * 100) / 100,
-          date: checkIn,
+          hours: this.roundHours(breakdown.totalWorkedHours),
+          regularHours: this.roundHours(breakdown.regularHours),
+          overtimeHours: this.roundHours(breakdown.overtimeHours),
+          date: new Date(attendance.checkInTime),
         });
       }
     }
 
     const hourlyRate = lecturer.hourlyRate ?? 0;
-    const grossEarnings = totalHours * hourlyRate;
-    const taxDeduction = grossEarnings * this.TAX_RATE;
-    const netEarnings = grossEarnings - taxDeduction;
+    const earningsBreakdown = this.getEarningsBreakdown(
+      regularHours,
+      overtimeHours,
+      hourlyRate,
+    );
 
     return {
       period: {
@@ -415,19 +537,21 @@ export class PayrollService {
         email: lecturer.user.email,
         staffNo: lecturer.staffNo,
         hourlyRate,
-        totalHours: Math.round(totalHours * 100) / 100,
-        grossEarnings: Math.round(grossEarnings * 100) / 100,
-        taxDeduction: Math.round(taxDeduction * 100) / 100,
+        totalHours: this.roundHours(totalHours),
+        regularHours: this.roundHours(regularHours),
+        overtimeHours: this.roundHours(overtimeHours),
+        overtimeRate: this.roundHours(earningsBreakdown.overtimeRate),
+        regularEarnings: this.roundHours(earningsBreakdown.regularEarnings),
+        overtimeEarnings: this.roundHours(earningsBreakdown.overtimeEarnings),
+        grossEarnings: this.roundHours(earningsBreakdown.grossEarnings),
+        taxDeduction: this.roundHours(earningsBreakdown.taxDeduction),
         taxRate: this.TAX_RATE,
-        earnings: Math.round(netEarnings * 100) / 100,
+        earnings: this.roundHours(earningsBreakdown.netEarnings),
         sessions,
       },
     };
   }
 
-  /**
-   * Get payroll for a custom date range
-   */
   async getLecturerPayrollByDateRange(
     lecturerId: string,
     startDate: Date,
@@ -472,40 +596,50 @@ export class PayrollService {
             name: true,
             courseId: true,
             moduleId: true,
+            startTime: true,
+            endTime: true,
           },
         },
       },
     });
 
     let totalHours = 0;
+    let regularHours = 0;
+    let overtimeHours = 0;
+
     const sessions: {
       sessionId: string;
       sessionName: string;
       hours: number;
+      regularHours: number;
+      overtimeHours: number;
       date: Date;
     }[] = [];
 
     for (const attendance of attendances) {
       if (attendance.checkInTime && attendance.checkOutTime) {
-        const checkIn = new Date(attendance.checkInTime);
-        const checkOut = new Date(attendance.checkOutTime);
-        const hours =
-          (checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60);
-        totalHours += hours;
+        const breakdown = this.getAttendanceHourBreakdown(attendance);
+        totalHours += breakdown.totalWorkedHours;
+        regularHours += breakdown.regularHours;
+        overtimeHours += breakdown.overtimeHours;
 
         sessions.push({
           sessionId: attendance.session.id,
           sessionName: attendance.session.name,
-          hours: Math.round(hours * 100) / 100,
-          date: checkIn,
+          hours: this.roundHours(breakdown.totalWorkedHours),
+          regularHours: this.roundHours(breakdown.regularHours),
+          overtimeHours: this.roundHours(breakdown.overtimeHours),
+          date: new Date(attendance.checkInTime),
         });
       }
     }
 
     const hourlyRate = lecturer.hourlyRate ?? 0;
-    const grossEarnings = totalHours * hourlyRate;
-    const taxDeduction = grossEarnings * this.TAX_RATE;
-    const netEarnings = grossEarnings - taxDeduction;
+    const earningsBreakdown = this.getEarningsBreakdown(
+      regularHours,
+      overtimeHours,
+      hourlyRate,
+    );
 
     return {
       period: {
@@ -518,19 +652,21 @@ export class PayrollService {
         email: lecturer.user.email,
         staffNo: lecturer.staffNo,
         hourlyRate,
-        totalHours: Math.round(totalHours * 100) / 100,
-        grossEarnings: Math.round(grossEarnings * 100) / 100,
-        taxDeduction: Math.round(taxDeduction * 100) / 100,
+        totalHours: this.roundHours(totalHours),
+        regularHours: this.roundHours(regularHours),
+        overtimeHours: this.roundHours(overtimeHours),
+        overtimeRate: this.roundHours(earningsBreakdown.overtimeRate),
+        regularEarnings: this.roundHours(earningsBreakdown.regularEarnings),
+        overtimeEarnings: this.roundHours(earningsBreakdown.overtimeEarnings),
+        grossEarnings: this.roundHours(earningsBreakdown.grossEarnings),
+        taxDeduction: this.roundHours(earningsBreakdown.taxDeduction),
         taxRate: this.TAX_RATE,
-        earnings: Math.round(netEarnings * 100) / 100,
+        earnings: this.roundHours(earningsBreakdown.netEarnings),
         sessions,
       },
     };
   }
 
-  /**
-   * Get payroll by email for a specific period
-   */
   async getLecturerPayrollByEmailAndPeriod(
     email: string,
     year: number,
