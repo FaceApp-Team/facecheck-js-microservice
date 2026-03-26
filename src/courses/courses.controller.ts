@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Patch,
   Post,
@@ -9,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { CoursesService } from './courses.service';
-import { CoursesDto } from '../dto/courses.dto';
+import { CoursesDto, ModulesDto } from '../dto/courses.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../guards/roles.guard';
 import { Request } from 'express';
@@ -21,6 +22,71 @@ import { SkipThrottle } from '@nestjs/throttler';
 @Controller('courses')
 export class CoursesController {
   constructor(private readonly courses: CoursesService) {}
+
+  // ==================== MODULE ENDPOINTS ====================
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
+  @Post('/modules/add')
+  async addModule(@Body() payload: ModulesDto, @Req() req: Request) {
+    const email = (req.user as any)?.email;
+    return this.courses.addModule(payload, email);
+  }
+
+  @Patch('/modules/update')
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  async updateModule(
+    @Body() payload: Partial<ModulesDto>,
+    @Query('moduleId') moduleId: string,
+    @Req() req: Request,
+  ) {
+    const email = (req.user as any)?.email;
+    return this.courses.updateModule(moduleId, payload, email);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    Role.ADMIN,
+    Role.SYSTEM_ADMIN,
+    Role.LECTURER,
+    Role.STUDENT,
+    Role.REP,
+    Role.STAFF,
+  )
+  @Get('/modules/all')
+  async getAllModules(@Req() req: Request) {
+    const email = (req.user as any)?.email;
+    return this.courses.getAllModules(email);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    Role.ADMIN,
+    Role.SYSTEM_ADMIN,
+    Role.LECTURER,
+    Role.STUDENT,
+    Role.REP,
+    Role.STAFF,
+  )
+  @Get('/modules/by-id')
+  async getModuleById(
+    @Query('moduleId') moduleId: string,
+    @Req() req: Request,
+  ) {
+    const email = (req.user as any)?.email;
+    return this.courses.getModuleById(moduleId, email);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Delete('/modules/remove')
+  @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)
+  async removeModule(@Query('moduleId') moduleId: string, @Req() req: Request) {
+    const email = (req.user as any)?.email;
+    return this.courses.removeModule(moduleId, email);
+  }
+
+  // ==================== COURSE ENDPOINTS ====================
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.SYSTEM_ADMIN)

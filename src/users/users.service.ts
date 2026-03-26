@@ -25,122 +25,153 @@ export class UsersService {
     private readonly configService: ConfigService,
   ) {}
 
-  /*conditionally adding the user based on their roles*/
-  async enrollUser(
-    payload: Partial<UsersDto>,
-    files: Express.Multer.File[],
+  /**
+   * Enroll face images for a user - separate from registration
+   * Can be called anytime to update face data
+   * Students can also provide their studentId and level (year group)
+   * This is for the students
+   */
+  async enrollFace(
     email: string,
+    files: Express.Multer.File[],
+    studentId?: string,
+    level?: number,
   ) {
-    //auth check for the admin
     await this.helpers.getUser(email);
+
     const user = await this.prisma.user.findUnique({
-      where: { email: payload.email },
+      where: { email: email },
+      include: { student: true },
     });
 
-    //student registration
-    if (payload.role === Role.STUDENT) {
-      if (!payload.studentId) {
-        throw new BadRequestException('Student ID is required for student');
-      }
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
 
-      const student = await this.prisma.student.findUnique({
-        where: { studentId: payload.studentId },
-        include: { user: true },
-      });
+    const hasFaceImages = Boolean(files && files.length > 0);
+    const hasStudentIdUpdate = Boolean(
+      studentId && studentId.trim().length > 0,
+    );
+    const hasLevelUpdate = level !== undefined && level !== null;
 
-      if (student) {
-        throw new ConflictException('Student with this ID already exists');
-      }
+    if (!hasFaceImages && !hasStudentIdUpdate && !hasLevelUpdate) {
+      throw new BadRequestException(
+        'Provide face images for enrollment or student details to update',
+      );
+    }
 
-      if (user) {
-        if (user.imageStatus === ImageStatus.UPLOADED) {
-          return {
-            message: 'User already has an image uploaded',
-            image: user.imageUrl,
-          };
+    let imageUrls: string[] = [];
+
+    if (hasFaceImages) {
+      // Validate files BEFORE uploading
+      for (const file of files) {
+        this.helpers.checkFileSize(file);
+        if (!file.buffer || file.buffer === null) {
+          throw new BadRequestException('Invalid image file');
         }
       }
 
-      const imageUrls = await this.helpers.uploadImages(files);
+      imageUrls = await this.helpers.uploadImages(files);
 
       if (!imageUrls || imageUrls.length === 0) {
         throw new BadRequestException('Image upload failed');
       }
 
-      if (user) {
-        if (user.embeddingStatus === ImageStatus.COMPLETED) {
-          return {
-            message:
-              'Student already enrolled. Image already processed previously.',
-            image: user.imageUrl,
-          };
-        }
+      try {
+        await this.helpers.enrollFace(user.id, imageUrls);
+      } catch (error) {
+        this.logger.error('Face enrollment failed', error);
+        throw new BadRequestException(
+          'Face enrollment failed. Please ensure the images are clear and try again.',
+        );
       }
 
-      await this.helpers.enrollFace(
-        user?.id ?? `${user?.name}-${Date.now()}`,
-        imageUrls,
-      );
-
-      await this.prisma.$transaction(async (tx) => {
-        //get courses from the payload and link to student
-        if (!payload.courses || payload.courses.length === 0) {
-          throw new BadRequestException('Courses are required for student');
-        }
-
-        // Fetch courses directly - no caching needed for enrollment transaction
-        const courses = await tx.course.findMany({
-          where: { code: { in: payload.courses } },
-        });
-
-        if (courses.length !== payload.courses.length) {
-          throw new BadRequestException('One or more courses do not exist');
-        }
-
-        //create a new student
-        const student = await tx.student.create({
-          data: {
-            user: {
-              connect: { id: user?.id },
-            },
-            matricNo: payload.studentId,
-            studentId: payload.studentId!,
-          },
-        });
-
-        for (const courseCode of payload.courses) {
-          await tx.courseEnrollment.create({
-            data: {
-              course: {
-                connect: { code: courseCode },
-              },
-              student: {
-                connect: { id: student.id },
-              },
-            },
-          });
-        }
-
-        //update the user with imageurl and face embedding if provided
-        await tx.student.update({
-          where: { id: student.id },
-          data: {
-            user: {
-              update: {
-                imageStatus: ImageStatus.UPLOADED,
-                imageUrl: imageUrls[0],
-              },
-            },
-          },
-        });
-
-        return { userId: user?.id };
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          imageStatus: ImageStatus.UPLOADED,
+          imageUrl: imageUrls[0],
+          embeddingStatus: ImageStatus.COMPLETED,
+        },
       });
+    }
 
-      return {
-        message: 'Your enrollment is successful. ',
-      };
-    } else if (payload.role === Role.LECTURER) {
+    // Create or update student record with studentId and level
+    if (hasStudentIdUpdate) {
+      if (user.student) {
+        // Student already exists — update
+        const normalizedStudentId = studentId!.trim();
+        const studentUpdateData: any = {
+          studentId: normalizedStudentId,
+          matricNo: normalizedStudentId,
+        };
+        if (hasLevelUpdate) {
+          studentUpdateData.level = level;
+        }
+        await this.prisma.student.update({
+          where: { id: user.student.id },
+          data: studentUpdateData,
+        });
+      } else {
+        // Student doesn't exist yet — create
+        const normalizedStudentId = studentId!.trim();
+        await this.prisma.student.create({
+          data: {
+            user: { connect: { id: user.id } },
+            studentId: normalizedStudentId,
+            matricNo: normalizedStudentId,
+            level: hasLevelUpdate ? level : 100,
+          },
+        });
+      }
+    } else if (user.student && hasLevelUpdate) {
+      // Only level provided for an existing student
+      await this.prisma.student.update({
+        where: { id: user.student.id },
+        data: { level },
+      });
+    }
+
+    await this.helpers.createSystemLog(
+      `${
+        hasFaceImages ? 'Face enrolled' : 'Enrollment details updated'
+      } for user ${user.email} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+
+    return {
+      message:
+        hasFaceImages && (hasStudentIdUpdate || hasLevelUpdate)
+          ? 'Face enrollment and details update successful'
+          : hasFaceImages
+            ? 'Face enrollment successful'
+            : 'Details update successful',
+      ...(hasFaceImages && { imageUrl: imageUrls[0] }),
+    };
+  }
+
+  /**
+   * Enroll a lecturer or staff member - admin only
+   */
+  async enrollUser(
+    payload: Partial<UsersDto>,
+    files: Express.Multer.File[],
+    adminEmail: string,
+  ) {
+    // Verify the requesting user is an admin
+    const admin = await this.helpers.getUser(adminEmail);
+    if (admin.role !== Role.ADMIN && admin.role !== Role.SYSTEM_ADMIN) {
+      throw new ForbiddenException(
+        'Only admins can enroll lecturers and staff',
+      );
+    }
+
+    // Check if a user with the target email already exists
+    const existingUser = await this.prisma.user.findUnique({
+      where: { email: payload.email },
+    });
+
+    if (payload.role === Role.LECTURER) {
       const lecturer = await this.prisma.lecturer.findUnique({
         where: { staffNo: payload.lecturerId },
         include: { user: true },
@@ -150,7 +181,7 @@ export class UsersService {
         throw new ConflictException('Lecturer with this ID already exists');
       }
 
-      //lecturer registration
+      //lecturer registration - NO course requirement (part-time lecturers)
       if (!payload.email || !payload.fullName || !payload.phone) {
         throw new BadRequestException(
           'Email, full name, phone are required for lecturer registration',
@@ -163,35 +194,27 @@ export class UsersService {
         );
       }
 
-      if (!payload.lecturerCreditHours) {
-        throw new BadRequestException(
-          'Lecturer credit hours is required for lecturer registration',
-        );
+      if (existingUser) {
+        throw new ConflictException('A user with this email already exists');
       }
 
       const randomPassword = this.helpers.generateRandomCode(8);
 
       const hashedPassword = await bcrypt.hash(randomPassword, 10);
 
-      const imageUrls = await this.helpers.uploadImages(files);
+      // Face images are optional - can be enrolled later
+      let imageUrls: string[] = [];
+      if (files && files.length > 0) {
+        imageUrls = await this.helpers.uploadImages(files);
 
-      if (!imageUrls || imageUrls.length === 0) {
-        throw new BadRequestException('Image upload failed');
-      }
-
-      if (user) {
-        if (user.embeddingStatus === ImageStatus.COMPLETED) {
-          return {
-            message:
-              'Lecturer already enrolled. Image already processed previously.',
-            image: user.imageUrl,
-          };
+        if (!imageUrls || imageUrls.length === 0) {
+          throw new BadRequestException('Image upload failed');
         }
       }
 
       const transaction = await this.prisma.$transaction(async (tx) => {
         //create a new lecturer user
-        const user = await tx.user.create({
+        const newUser = await tx.user.create({
           data: {
             email: payload.email ?? '',
             name: payload.fullName ?? 'CoMAS Lecturer',
@@ -203,75 +226,51 @@ export class UsersService {
           },
         });
 
-        //create lecturer profile
-        const lecturer = await tx.lecturer.create({
+        //create lecturer profile - NO course assignments (part-time)
+        const newLecturer = await tx.lecturer.create({
           data: {
             user: {
-              connect: { id: user.id },
+              connect: { id: newUser.id },
             },
             staffNo: payload.lecturerId,
-            creditHours: parseInt(payload.lecturerCreditHours!.toString()),
             hourlyRate: payload.lecturerHourlyRate
               ? parseFloat(payload.lecturerHourlyRate.toString())
               : 0.0,
           },
         });
 
-        //create courses for lecturer if provided
-        if (!payload.courses || payload.courses.length === 0) {
-          throw new BadRequestException('Courses are required for lecturer');
-        }
-
-        const courses = await tx.course.findMany({
-          where: { code: { in: payload.courses } },
-        });
-
-        if (courses.length !== payload.courses.length) {
-          throw new BadRequestException('One or more courses do not exist');
-        }
-
-        for (const courseCode of payload.courses) {
-          await tx.courseLecturer.create({
+        //update the user with imageurl if provided
+        if (imageUrls && imageUrls.length > 0) {
+          await tx.lecturer.update({
+            where: { id: newLecturer.id },
             data: {
-              course: {
-                connect: { code: courseCode },
-              },
-              lecturer: {
-                connect: { id: lecturer.id },
+              user: {
+                update: {
+                  imageStatus: ImageStatus.UPLOADED,
+                  imageUrl: imageUrls[0],
+                },
               },
             },
           });
         }
 
-        //update the user with imageurl and face embedding if provided
-        const updatedUser = await tx.lecturer.update({
-          where: { id: lecturer.id },
-          data: {
-            user: {
-              update: {
-                imageStatus: ImageStatus.UPLOADED,
-                imageUrl: imageUrls[0],
-              },
-            },
-          },
-        });
-
-        return { updatedUser, userId: user.id, user };
+        return { lecturer: newLecturer, userId: newUser.id, user: newUser };
       });
 
-      // Enroll face with actual user ID after DB record is created
-      try {
-        await this.helpers.enrollFace(transaction.userId, imageUrls);
-      } catch (error) {
-        // Face enrollment failed - delete the user from DB and ask to retry
-        this.logger.error(
-          'Face enrollment failed for lecturer, rolling back user creation',
-          error,
-        );
-        await this.prisma.user.delete({ where: { id: transaction.userId } });
-        throw new BadRequestException(
-          'Face enrollment failed. Please ensure the images are clear and try again.',
-        );
+      // Enroll face if images provided
+      if (imageUrls && imageUrls.length > 0) {
+        try {
+          await this.helpers.enrollFace(transaction.userId, imageUrls);
+        } catch (error) {
+          this.logger.error(
+            'Face enrollment failed for lecturer, rolling back user creation',
+            error,
+          );
+          await this.prisma.user.delete({ where: { id: transaction.userId } });
+          throw new BadRequestException(
+            'Face enrollment failed. Please ensure the images are clear and try again.',
+          );
+        }
       }
 
       await this.helpers.sendSMS(
@@ -281,7 +280,7 @@ export class UsersService {
 
       return {
         message: 'Lecturer enrolled successfully',
-        lecturer: transaction.updatedUser,
+        lecturer: transaction.lecturer,
         tempPassword: randomPassword,
       };
     } else if (payload.role === Role.STAFF) {
@@ -293,7 +292,7 @@ export class UsersService {
         !payload.staffId
       ) {
         throw new BadRequestException(
-          'Email, full name and phone are required for lecturer registration',
+          'Email, full name and phone are required for staff registration',
         );
       }
 
@@ -305,29 +304,27 @@ export class UsersService {
         throw new ConflictException('Staff with this ID already exists');
       }
 
+      if (existingUser) {
+        throw new ConflictException('A user with this email already exists');
+      }
+
       const randomPassword = Math.random().toString(36).slice(-8);
 
       const hashedPassword = await bcrypt.hash(randomPassword, 10);
 
-      const imageUrls = await this.helpers.uploadImages(files);
+      // Face images are optional - can be enrolled later
+      let imageUrls: string[] = [];
+      if (files && files.length > 0) {
+        imageUrls = await this.helpers.uploadImages(files);
 
-      if (!imageUrls || imageUrls.length === 0) {
-        throw new BadRequestException('Image upload failed');
-      }
-
-      if (user) {
-        if (user.embeddingStatus === ImageStatus.COMPLETED) {
-          return {
-            message:
-              'Staff already enrolled. Image already processed previously.',
-            image: user.imageUrl,
-          };
+        if (!imageUrls || imageUrls.length === 0) {
+          throw new BadRequestException('Image upload failed');
         }
       }
 
       const transaction = await this.prisma.$transaction(async (tx) => {
         //create a new staff user
-        const user = await tx.user.create({
+        const newUser = await tx.user.create({
           data: {
             email: payload.email ?? '',
             name: payload.fullName ?? 'CoMAS Staff',
@@ -338,45 +335,48 @@ export class UsersService {
           },
         });
 
-        //create lecturer profile
-        const staff = await tx.staff.create({
+        //create staff profile
+        const newStaff = await tx.staff.create({
           data: {
             user: {
-              connect: { id: user.id },
+              connect: { id: newUser.id },
             },
             staffNo: payload.staffId ?? '',
           },
         });
 
-        //update the user with imageurl and face embedding if provided
-        const updatedUser = await tx.staff.update({
-          where: { id: staff.id },
-          data: {
-            user: {
-              update: {
-                imageStatus: ImageStatus.UPLOADED,
-                imageUrl: imageUrls[0],
+        //update the user with imageurl if provided
+        if (imageUrls && imageUrls.length > 0) {
+          await tx.staff.update({
+            where: { id: newStaff.id },
+            data: {
+              user: {
+                update: {
+                  imageStatus: ImageStatus.UPLOADED,
+                  imageUrl: imageUrls[0],
+                },
               },
             },
-          },
-        });
+          });
+        }
 
-        return { updatedUser, userId: user.id, user };
+        return { staff: newStaff, userId: newUser.id, user: newUser };
       });
 
-      // Enroll face with actual user ID after DB record is created
-      try {
-        await this.helpers.enrollFace(transaction.userId, imageUrls);
-      } catch (error) {
-        // Face enrollment failed - delete the user from DB and ask to retry
-        this.logger.error(
-          'Face enrollment failed for staff, rolling back user creation',
-          error,
-        );
-        await this.prisma.user.delete({ where: { id: transaction.userId } });
-        throw new BadRequestException(
-          'Face enrollment failed. Please ensure the images are clear and try again.',
-        );
+      // Enroll face if images provided
+      if (imageUrls && imageUrls.length > 0) {
+        try {
+          await this.helpers.enrollFace(transaction.userId, imageUrls);
+        } catch (error) {
+          this.logger.error(
+            'Face enrollment failed for staff, rolling back user creation',
+            error,
+          );
+          await this.prisma.user.delete({ where: { id: transaction.userId } });
+          throw new BadRequestException(
+            'Face enrollment failed. Please ensure the images are clear and try again.',
+          );
+        }
       }
 
       await this.helpers.sendSMS(
@@ -386,7 +386,7 @@ export class UsersService {
 
       return {
         message: 'Staff enrolled successfully',
-        staff: transaction.updatedUser,
+        staff: transaction.staff,
         tempPassword: randomPassword,
       };
     } else {
@@ -500,31 +500,32 @@ export class UsersService {
         updateData.matricNo = payload.studentId;
         updateData.studentId = payload.studentId;
       }
+      if (payload.level) {
+        updateData.level = parseInt(payload.level.toString());
+      }
       const transaction = await this.prisma.$transaction(async (tx) => {
+        // Handle course enrollments
         if (payload.courses && payload.courses.length > 0) {
           for (const courseCode of payload.courses) {
-            const existingEnrollment = await tx.courseEnrollment.findFirst({
+            const course = await tx.course.findUnique({
+              where: { code: courseCode },
+            });
+            if (!course) {
+              throw new NotFoundException('Course not found: ' + courseCode);
+            }
+            const existingEnrollment = await tx.courseEnrollment.findUnique({
               where: {
-                studentId: student.id,
-                course: {
-                  code: courseCode,
+                studentId_courseId: {
+                  studentId: student.id,
+                  courseId: course.id,
                 },
               },
             });
-            if (existingEnrollment) {
-              throw new ConflictException(
-                `Student already enrolled in course ${courseCode}`,
-              );
-            }
             if (!existingEnrollment) {
               await tx.courseEnrollment.create({
                 data: {
-                  course: {
-                    connect: { code: courseCode },
-                  },
-                  student: {
-                    connect: { id: student.id },
-                  },
+                  course: { connect: { id: course.id } },
+                  student: { connect: { id: student.id } },
                 },
               });
             }
@@ -559,61 +560,24 @@ export class UsersService {
       if (payload.lecturerCreditHours) {
         updateData.creditHours = payload.lecturerCreditHours;
       }
-      if (payload.fullName) {
-        updateData.name = payload.fullName;
-      }
-      const transaction = await this.prisma.$transaction(async (tx) => {
-        if (payload.courses && payload.courses.length > 0) {
-          for (const courseCode of payload.courses) {
-            // Fetch course by code to get its ID
-            const course = await tx.course.findUnique({
-              where: { code: courseCode },
-            });
-            if (!course) {
-              throw new NotFoundException('Course not found: ' + courseCode);
-            }
-            // Check for existing assignment using lecturerId and courseId
-            const existingAssignment = await tx.courseLecturer.findUnique({
-              where: {
-                lecturerId_courseId: {
-                  lecturerId: lecturer.id,
-                  courseId: course.id,
-                },
-              },
-            });
-            if (existingAssignment) {
-              throw new ConflictException(
-                'Lecturer already assigned to course ' + courseCode,
-              );
-            }
-            await tx.courseLecturer.create({
-              data: {
-                course: {
-                  connect: { id: course.id },
-                },
-                lecturer: {
-                  connect: { id: lecturer.id },
-                },
-              },
-            });
-          }
-        }
-        const updatedLecturer = await tx.lecturer.update({
-          where: { id: lecturer.id },
-          data: {
-            ...updateData,
+      // Note: Lecturers are part-time and not tied to courses
+      // Course assignments are not managed here
+      const updatedLecturer = await this.prisma.lecturer.update({
+        where: { id: lecturer.id },
+        data: {
+          ...updateData,
+          ...(payload.fullName && {
             user: {
               update: {
                 name: payload.fullName,
               },
             },
-          },
-        });
-        return { updatedLecturer };
+          }),
+        },
       });
       return {
         message: 'Lecturer record updated successfully',
-        lecturer: transaction.updatedLecturer,
+        lecturer: updatedLecturer,
       };
     } else if (targetUser.role === Role.STAFF) {
       const staff = await this.prisma.staff.findUnique({
@@ -642,9 +606,25 @@ export class UsersService {
   async removeUser(email: string) {
     const user = await this.helpers.getUser(email);
 
+    if (
+      user.role === Role.LECTURER ||
+      user.role === Role.STAFF ||
+      user.role === Role.STUDENT ||
+      user.role === Role.REP
+    ) {
+      //remove face embeddings on user removal
+      await this.helpers.deleteFaceEmbeddings(user.id!);
+    }
+
+    //delete the user from the database
     await this.prisma.user.delete({
-      where: { id: user.id },
+      where: { email: email },
     });
+
+    await this.helpers.createSystemLog(
+      `User ${email} removed on ${new Date().toISOString()}`,
+      Priority.HIGH,
+    );
 
     return {
       message: 'User removed successfully',
@@ -657,6 +637,11 @@ export class UsersService {
         student: true,
         lecturer: true,
         staff: true,
+        attendances: true,
+        createdModules: true,
+        subtopicsAsLecturer: true,
+        createdTimetables: true,
+        timetableSlotsAsLecturer: true,
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -666,9 +651,13 @@ export class UsersService {
     };
   }
 
-  async assignRep(courseId: string, studentId: string, email: string) {
-    if (!courseId || !studentId) {
-      throw new BadRequestException('Course ID and Student ID are required');
+  /**
+   * Assign a student as a representative (StudentRep)
+   * Reps are NOT tied to specific courses - they serve for all courses throughout their studies
+   */
+  async assignRep(studentId: string, email: string) {
+    if (!studentId) {
+      throw new BadRequestException('Student ID is required');
     }
 
     const user = await this.helpers.getUser(email);
@@ -679,21 +668,14 @@ export class UsersService {
       user.role !== Role.STAFF &&
       user.role !== Role.LECTURER
     ) {
-      throw new ForbiddenException('Not authorized to assign course reps');
-    }
-
-    const course = await this.prisma.course.findUnique({
-      where: { id: courseId },
-    });
-
-    if (!course) {
-      throw new NotFoundException('Course not found');
+      throw new ForbiddenException('Not authorized to assign reps');
     }
 
     const student = await this.prisma.student.findUnique({
       where: { id: studentId },
       include: {
         user: true,
+        studentRep: true,
       },
     });
 
@@ -701,68 +683,55 @@ export class UsersService {
       throw new NotFoundException('Student not found');
     }
 
-    const enrollment = await this.prisma.courseEnrollment.findUnique({
-      where: {
-        studentId_courseId: {
-          studentId,
-          courseId,
-        },
-      },
-    });
-
-    if (!enrollment) {
-      throw new BadRequestException(
-        'Student must be enrolled in the course to be assigned as rep',
-      );
+    if (student.studentRep) {
+      return {
+        success: true,
+        message: 'Student is already a representative',
+        data: student.studentRep,
+      };
     }
 
     const transaction = await this.prisma.$transaction(async (tx) => {
-      const rep = await tx.courseRep.upsert({
-        where: {
-          studentId_courseId: {
-            studentId,
-            courseId,
-          },
-        },
-        update: {
-          studentId,
-          courseId,
-        },
-        create: {
-          studentId,
-          courseId,
+      const rep = await tx.studentRep.create({
+        data: {
+          studentId: student.id,
         },
       });
 
-      //update course rep role
+      //update user role to REP
       await tx.user.update({
         where: { id: student.userId },
         data: {
           role: Role.REP,
         },
       });
-      return {
-        rep,
-        created: true,
-      };
+
+      return { rep };
     });
 
-    if (transaction.created) {
-      await this.helpers.sendSMS(
-        [student.user.phone],
-        `Hello ${student.user.name}, you have been assigned as the Course Representative for ${course.title}. Congratulations!`,
-      );
-    }
+    await this.helpers.sendSMS(
+      [student.user.phone],
+      `Hello ${student.user.name}, you have been appointed as a Student Representative. Congratulations!`,
+    );
+
+    await this.helpers.createSystemLog(
+      `Student ${student.user.name} assigned as representative by ${user.name} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+
     return {
       success: true,
-      message: 'Course representative assigned successfully',
+      message: 'Student representative assigned successfully',
       data: transaction.rep,
     };
   }
 
-  async removeCourseRep(courseId: string, studentId: string, email: string) {
-    if (!courseId || !studentId) {
-      throw new BadRequestException('Course ID and Student ID are required');
+  /**
+   * Remove a student representative
+   */
+  async removeRep(studentId: string, email: string) {
+    if (!studentId) {
+      throw new BadRequestException('Student ID is required');
     }
     const user = await this.helpers.getUser(email);
 
@@ -771,17 +740,8 @@ export class UsersService {
       user.role !== Role.SYSTEM_ADMIN &&
       user.role !== Role.STAFF
     ) {
-      throw new ForbiddenException('Not authorized to remove course reps');
+      throw new ForbiddenException('Not authorized to remove reps');
     }
-
-    const rep = await this.prisma.courseRep.findUnique({
-      where: {
-        studentId_courseId: {
-          studentId,
-          courseId,
-        },
-      },
-    });
 
     const student = await this.prisma.student.findUnique({
       where: { id: studentId },
@@ -789,50 +749,50 @@ export class UsersService {
         user: {
           select: { phone: true, email: true, name: true },
         },
+        studentRep: true,
       },
     });
 
-    if (!rep) {
-      throw new NotFoundException('Course representative not found');
+    if (!student) {
+      throw new NotFoundException('Student not found');
     }
 
-    await this.prisma.courseRep.delete({
-      where: {
-        studentId_courseId: {
-          studentId,
-          courseId,
+    if (!student.studentRep) {
+      throw new NotFoundException('Student is not a representative');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.studentRep.delete({
+        where: { studentId: student.id },
+      });
+
+      await tx.user.update({
+        where: { id: student.userId },
+        data: {
+          role: Role.STUDENT,
         },
-      },
-    });
-    await this.prisma.student.update({
-      where: { id: studentId },
-      data: {
-        user: {
-          update: {
-            role: Role.STUDENT,
-          },
-        },
-      },
+      });
     });
 
     await this.helpers.sendSMS(
-      [student!.user.phone],
-      `The course representative role for course ID ${courseId} has been removed.`,
+      [student.user.phone],
+      `Your student representative role has been removed.`,
     );
 
     await this.helpers.createSystemLog(
-      `Course representative removed for course ID ${courseId} and student ID ${studentId} by ${user.name} on ${new Date().toISOString()}`,
+      `Student representative removed for student ${student.user.name} by ${user.name} on ${new Date().toISOString()}`,
       Priority.MEDIUM,
     );
 
     await this.helpers.createUserLog(
-      student!.user.email,
-      `You have been removed as the Course Representative for course ID ${courseId} on ${new Date().toISOString()}`,
+      student.user.email,
+      `Your Student Representative role has been removed on ${new Date().toISOString()}`,
       Priority.MEDIUM,
     );
+
     return {
       success: true,
-      message: 'Course representative removed successfully',
+      message: 'Student representative removed successfully',
     };
   }
 
@@ -922,36 +882,6 @@ export class UsersService {
     };
   }
 
-  async fetchAllCourseReps(email: string) {
-    const user = await this.helpers.getUser(email);
-
-    if (
-      user.role !== Role.ADMIN &&
-      user.role !== Role.SYSTEM_ADMIN &&
-      user.role !== Role.STAFF &&
-      user.role !== Role.LECTURER
-    ) {
-      throw new ForbiddenException('Not authorized to view course reps');
-    }
-
-    const reps = await this.prisma.courseRep.findMany({
-      include: {
-        student: {
-          include: {
-            user: {
-              select: { id: true, email: true, name: true },
-            },
-          },
-        },
-        course: true,
-      },
-    });
-
-    return {
-      reps,
-    };
-  }
-
   async createSuperAdmin(
     email: string,
     name: string,
@@ -1009,10 +939,19 @@ export class UsersService {
       return { user, admin };
     });
 
-    await this.helpers.sendSMS(
-      [phone],
-      `Hello ${name}, your super admin account has been created. Your temporary password is: ${randomPassword}. Please change it after your first login.`,
-    );
+    try {
+      await this.helpers.sendSMS(
+        [phone],
+        `Hello ${name}, your super admin account has been created. Your temporary password is: ${randomPassword}. Please change it after your first login.`,
+      );
+    } catch (error: any) {
+      this.logger.error(error);
+      //delete superadmin if sms sending fais, and retry
+      await this.prisma.user.delete({ where: { id: transaction.user.id } });
+      throw new BadRequestException(
+        'Failed to send SMS. Super admin creation rolled back. Please try again.',
+      );
+    }
 
     await this.helpers.createSystemLog(
       `New super admin created: ${email} by SYSTEM on ${new Date().toISOString()}`,
@@ -1044,7 +983,9 @@ export class UsersService {
       user.role !== Role.ADMIN &&
       user.role !== Role.SYSTEM_ADMIN &&
       user.role !== Role.STAFF &&
-      user.role !== Role.LECTURER
+      user.role !== Role.LECTURER &&
+      user.role !== Role.REP &&
+      user.role !== Role.STUDENT
     ) {
       throw new ForbiddenException('Not authorized to view students');
     }
@@ -1058,9 +999,16 @@ export class UsersService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return {
-      students,
-    };
+    const lecturers = await this.prisma.lecturer.findMany({
+      include: {
+        user: {
+          select: { id: true, email: true, name: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return { students, lecturers };
   }
 
   async updateThresholds(
@@ -1071,7 +1019,7 @@ export class UsersService {
 
     if (user.role !== Role.LECTURER && user.role !== Role.REP) {
       throw new ForbiddenException(
-        'Only lecturers and course reps can update their thresholds',
+        'Only lecturers and reps can update their thresholds',
       );
     }
 
@@ -1109,10 +1057,10 @@ export class UsersService {
         thresholds: updatedThresholds,
       };
     } else if (user.role === Role.REP) {
-      const rep = await this.prisma.student.findFirst({
+      const student = await this.prisma.student.findFirst({
         where: { userId: user.id },
         include: {
-          courseReps: {
+          studentRep: {
             include: {
               thresholds: {
                 select: { lateThreshold: true, absentThreshold: true },
@@ -1122,20 +1070,20 @@ export class UsersService {
         },
       });
 
-      if (!rep) {
-        throw new NotFoundException('Student record not found');
+      if (!student || !student.studentRep) {
+        throw new NotFoundException('Student rep record not found');
       }
 
       const updatedThresholds = await this.prisma.thresholds.upsert({
         where: {
-          courseRepId: rep.courseReps[0]?.id,
+          studentRepId: student.studentRep.id,
         },
         update: {
           lateThreshold: thresholds.lateThreshold,
           absentThreshold: thresholds.absentThreshold,
         },
         create: {
-          courseRepId: rep.courseReps[0]?.id,
+          studentRepId: student.studentRep.id,
           absentThreshold: thresholds.absentThreshold,
           lateThreshold: thresholds.lateThreshold,
         },
@@ -1197,7 +1145,7 @@ export class UsersService {
     };
   }
 
-  async getCourseAllReps(email: string) {
+  async getAllReps(email: string) {
     const user = await this.helpers.getUser(email);
 
     if (
@@ -1206,26 +1154,31 @@ export class UsersService {
       user.role !== Role.STAFF &&
       user.role !== Role.LECTURER
     ) {
-      throw new ForbiddenException('Not authorized to view all course reps');
+      throw new ForbiddenException('Not authorized to view all reps');
     }
 
-    const reps = await this.prisma.courseRep.findMany({
+    const reps = await this.prisma.studentRep.findMany({
       include: {
         student: {
           include: {
             user: {
               select: { id: true, email: true, name: true, phone: true },
             },
-          },
-        },
-        course: {
-          include: {
-            lecturers: {
+            enrollments: {
               include: {
-                lecturer: {
+                course: {
                   include: {
-                    user: {
-                      select: { id: true, email: true, name: true },
+                    module: true,
+                    lecturers: {
+                      include: {
+                        lecturer: {
+                          include: {
+                            user: {
+                              select: { id: true, email: true, name: true },
+                            },
+                          },
+                        },
+                      },
                     },
                   },
                 },
@@ -1233,6 +1186,7 @@ export class UsersService {
             },
           },
         },
+        thresholds: true,
       },
       orderBy: { assignedAt: 'desc' },
     });

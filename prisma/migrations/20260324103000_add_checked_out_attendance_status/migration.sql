@@ -1,0 +1,6 @@
+DO $$
+BEGIN
+  ALTER TYPE "AttendanceStatus" ADD VALUE IF NOT EXISTS 'CHECKED_OUT';
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;

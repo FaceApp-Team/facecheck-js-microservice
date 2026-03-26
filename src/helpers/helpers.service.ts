@@ -142,7 +142,7 @@ export class HelpersService {
       );
 
       return mail;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to send email to ${to}:`, error.message);
       this.logger.error('Error details:', error.stack);
 
@@ -195,6 +195,7 @@ export class HelpersService {
       );
 
       if (response.status !== 200) {
+        this.logger.error(response);
         this.logger.error(
           `SMS sending failed: ${JSON.stringify(response.data)}`,
         );
@@ -210,7 +211,7 @@ export class HelpersService {
       }
 
       return response;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`SMS sending error: ${error.message}`);
       await this.createSystemLog(
         `Error sending SMS to ${recipients.join(
@@ -247,7 +248,7 @@ export class HelpersService {
           },
         },
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to create user log: ${error.message}`);
       throw new InternalServerErrorException(
         `Failed to create user log: ${error.message}`,
@@ -268,7 +269,7 @@ export class HelpersService {
           priority: priority,
         },
       });
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Failed to create system log: ${error.message}`);
       throw new InternalServerErrorException(
         `Failed to create system log: ${error.message}`,
@@ -385,7 +386,7 @@ export class HelpersService {
       }
 
       return response.data;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Face enrollment error: ${error.message}`);
       throw new InternalServerErrorException(
         `Face enrollment failed: ${error.message}`,
@@ -426,7 +427,7 @@ export class HelpersService {
       }
 
       return response.data;
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Face recognition error: ${error.message}`);
       throw new InternalServerErrorException(
         `Face recognition failed: ${error.message}`,
@@ -448,6 +449,48 @@ export class HelpersService {
     }
   }
 
+  async deleteFaceEmbeddings(userId: string) {
+    if (!userId) {
+      throw new BadRequestException('User ID is required');
+    }
+
+    const env = this.config.get<string>('app.env');
+    const baseUrl =
+      env === 'production'
+        ? this.config.get<string>('face.prodDeletionUrl')
+        : this.config.get<string>('face.devDeletionUrl');
+
+    if (!baseUrl) {
+      throw new InternalServerErrorException(
+        'Face deletion endpoint is not configured',
+      );
+    }
+
+    const deleteEndpoint = `${baseUrl}/${userId}`;
+
+    try {
+      const response = await firstValueFrom(this.fetch.delete(deleteEndpoint));
+
+      if (response.status !== 200) {
+        this.logger.error(
+          `Face embeddings deletion failed: ${JSON.stringify(response.data)}`,
+        );
+        throw new InternalServerErrorException(
+          response.data?.message ||
+            'Face embeddings deletion failed. Try again later.',
+        );
+      }
+
+      this.logger.log(`Face embeddings deleted for user ${userId}`);
+      return response.data;
+    } catch (error: any) {
+      this.logger.error(`Face embeddings deletion error: ${error.message}`);
+      throw new InternalServerErrorException(
+        `Face embeddings deletion failed: ${error.message}`,
+      );
+    }
+  }
+
   checkFileSize(file: Express.Multer.File) {
     const maxSizeInBytes = 10 * 1024 * 1024; // 10MB
 
@@ -460,5 +503,53 @@ export class HelpersService {
     if (!allowedTypes.includes(file.mimetype)) {
       throw new UnsupportedMediaTypeException('Unsupported media type');
     }
+  }
+
+  async generateQRCode(sessionId: string) {
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Session not found');
+    }
+
+    const apiNinjaBaseUrl = this.config.get<string>('apiNinjas.baseUrl');
+    const apiNinjaApiKey = this.config.get<string>('apiNinjas.apiKey');
+
+    if (!apiNinjaBaseUrl || !apiNinjaApiKey) {
+      throw new InternalServerErrorException(
+        'API Ninjas configuration is missing',
+      );
+    }
+    const kioskModeUrl = this.config.get<string>('app.clientKioskUrl');
+
+    if (!kioskModeUrl) {
+      throw new InternalServerErrorException(
+        'Kiosk mode URL is not configured',
+      );
+    }
+
+    const response = await firstValueFrom(
+      this.fetch.get(
+        `${apiNinjaBaseUrl}/qrcode?data=${kioskModeUrl}/${sessionId}&format=png&bg_color=0000ff`,
+        {
+          headers: {
+            'X-Api-Key': apiNinjaApiKey,
+          },
+        },
+      ),
+    );
+
+    if (response.status !== 200) {
+      this.logger.error(
+        `QR code generation failed: ${JSON.stringify(response.data)}`,
+      );
+      throw new InternalServerErrorException(
+        response.data?.message || 'QR code generation failed. Try again later.',
+      );
+    }
+
+    return response.data;
   }
 }

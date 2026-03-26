@@ -37,32 +37,50 @@ export class AuthController {
     return response;
   }
 
+  /**
+   * Change password (logged-in user)
+   * No reset token needed — user is already authenticated via JWT.
+   * First-time password change (isPasswordChanged = false) does not require old password.
+   */
   @UseGuards(JwtAuthGuard)
-  @Post('reset-password')
-  async resetPassword(
+  @Post('change-password')
+  async changePassword(
     @Req() req: Request,
     @Body()
     payload: {
-      oldPassword: string;
+      oldPassword?: string;
       newPassword: string;
     },
-    @Query('resetCode') resetCode: string,
   ) {
     const email = (req.user as any)?.email;
-    const response = await this.auth.resetPassword(
+    return this.auth.changePassword(
+      email,
       payload.newPassword,
       payload.oldPassword,
-      email,
-      resetCode,
     );
-    return response;
   }
 
-  @Get('request-reset-code')
-  @UseGuards(JwtAuthGuard)
-  async requestResetCode(@Req() req: Request) {
-    const email = (req.user as any)?.email;
-    const response = await this.auth.requestResetCode(email);
-    return response;
+  /**
+   * Forgot password (not logged in)
+   * Sends a 6-digit reset token to the user's phone via SMS.
+   */
+  @Post('forgot-password')
+  async forgotPassword(@Body('email') email: string) {
+    return this.auth.forgotPassword(email);
+  }
+
+  /**
+   * Reset password with token (not logged in)
+   * Verifies the reset token sent via SMS and sets the new password.
+   */
+  @Post('reset-password-with-token')
+  async resetPasswordWithToken(
+    @Body() body: { email: string; token: string; newPassword: string },
+  ) {
+    return this.auth.resetPasswordWithToken(
+      body.email,
+      body.token,
+      body.newPassword,
+    );
   }
 }

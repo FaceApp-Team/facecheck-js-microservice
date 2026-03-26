@@ -3,25 +3,25 @@ import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
 export class TransferRecipientDto {
   @IsString()
   @IsNotEmpty()
-  accountNumber: string;
+  accountNumber!: string;
 
   @IsString()
   @IsNotEmpty()
-  type: string;
+  type!: string;
 
   @IsString()
   @IsNotEmpty()
-  accountName: string;
+  accountName!: string;
 
   @IsString()
   @IsNotEmpty()
-  bankCode: string;
+  bankCode!: string;
 
   @IsString()
   @IsOptional()
-  bankName: string;
+  bankName?: string;
 
   @IsString()
   @IsNotEmpty()
-  currency: string;
+  currency!: string;
 }

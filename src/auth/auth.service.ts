@@ -86,7 +86,7 @@ export class AuthService {
     //send the email verification code (after user is created)
     try {
       await this.sendVerificationCode(payload.email, payload.name, code);
-    } catch (emailError) {
+    } catch (emailError: any) {
       // Rollback: delete the user if email sending fails
       await this.prisma.user.delete({
         where: { email: payload.email },
@@ -368,93 +368,162 @@ export class AuthService {
     return { message: 'Email verified successfully' };
   }
 
-  async requestResetCode(email: string): Promise<{ message: string }> {
+  /**
+   * Forgot password — public endpoint (user is NOT logged in)
+   * Sends a 6-digit reset token to the user's registered phone number.
+   */
+  async forgotPassword(email: string): Promise<{ message: string }> {
+    if (!email) {
+      throw new BadRequestException('Email is required');
+    }
+
     const user = await this.helpers.getUser(email);
 
     if (!user.phone) {
-      throw new BadRequestException('Phone number not found for this user');
+      throw new BadRequestException(
+        'No phone number associated with this account. Contact support.',
+      );
     }
 
-    //generate 6 digit code
-    const code = randomInt(100000, 1_000_000).toString();
-    const recipients = Array.from([user.phone]);
+    if (user.accountStatus === AccountStatus.SUSPENDED) {
+      throw new ForbiddenException('Account is suspended');
+    }
 
-    //send the password reset code
-    await this.helpers.sendSMS(
-      recipients,
-      `Hello! Requested password reset code for ${this.config.get<string>('app.name')} : ${code}. Ignore if you did not request.`,
-    );
-    //update user with password reset code and timestamp
+    const token = randomInt(100000, 1_000_000).toString();
+
     await this.prisma.user.update({
       where: { email },
       data: {
-        passwordResetCode: code,
+        passwordResetCode: token,
         resetCodeCreatedAt: new Date(),
       },
     });
 
-    //create user log
-    await this.helpers.createUserLog(
-      email,
-      `Password reset code sent to phone at ${new Date().toISOString()}`,
-      Priority.MEDIUM,
+    await this.helpers.sendSMS(
+      [user.phone],
+      `Hello ${user.name}! Your password reset token for ${this.config.get<string>('app.name')} is: ${token}. This expires in 1 hour. Ignore if you did not request this.`,
     );
 
-    //create system log
     await this.helpers.createSystemLog(
-      `Password reset code sent to phone for user: ${email} at ${new Date().toISOString()}`,
+      `Forgot-password token sent to phone for user: ${email} at ${new Date().toISOString()}`,
       Priority.MEDIUM,
     );
 
-    return { message: 'Password reset code sent to phone' };
+    return {
+      message: 'Password reset token sent to your registered phone number',
+    };
   }
 
-  async resetPassword(
-    newPassword: string,
-    oldPassword: string,
+  /**
+   * Reset password with token — public endpoint (user is NOT logged in)
+   * Validates the reset token and sets a new password. No old password required.
+   */
+  async resetPasswordWithToken(
     email: string,
-    resetCode?: string,
-  ) {
+    token: string,
+    newPassword: string,
+  ): Promise<{ message: string }> {
+    if (!email || !token || !newPassword) {
+      throw new BadRequestException(
+        'Email, token, and new password are required',
+      );
+    }
+
     const user = await this.helpers.getUser(email);
 
-    // reset code must exist
-    if (
-      (!user.passwordResetCode && user.isPasswordChanged) ||
-      (!resetCode && user.isPasswordChanged)
-    ) {
-      throw new BadRequestException('Password reset code is required');
+    if (!user.passwordResetCode) {
+      throw new BadRequestException(
+        'No reset token found. Please request a new one.',
+      );
     }
 
-    // check reset code expiry
-    if (!user.resetCodeCreatedAt && user.isPasswordChanged) {
-      throw new BadRequestException('Reset code metadata missing');
+    if (!user.resetCodeCreatedAt) {
+      throw new BadRequestException('Reset token metadata missing');
     }
 
-    const hours = resetCode
-      ? (Date.now() - user.resetCodeCreatedAt!.getTime()) / 3_600_000
-      : 0;
+    // Check token expiry (1 hour)
+    const hoursElapsed =
+      (Date.now() - user.resetCodeCreatedAt.getTime()) / 3_600_000;
 
-    if (hours > 1) {
-      throw new BadRequestException('Password reset code has expired');
+    if (hoursElapsed > 1) {
+      // Clear expired token
+      await this.prisma.user.update({
+        where: { email },
+        data: { passwordResetCode: null, resetCodeCreatedAt: null },
+      });
+      throw new BadRequestException(
+        'Reset token has expired. Please request a new one.',
+      );
     }
 
-    // validate reset code
-    if (resetCode !== user.passwordResetCode && user.isPasswordChanged) {
-      throw new UnauthorizedException('Invalid password reset code');
+    // Validate token
+    if (token !== user.passwordResetCode) {
+      throw new UnauthorizedException('Invalid reset token');
     }
 
-    // validate old password
-    const passwordMatch = await bcrypt.compare(oldPassword, user.password!);
+    // Hash new password
+    const hash = await bcrypt.hash(newPassword, 10);
 
-    if (!passwordMatch) {
-      throw new UnauthorizedException('Old password is incorrect');
+    await this.prisma.user.update({
+      where: { email },
+      data: {
+        password: hash,
+        passwordResetCode: null,
+        resetCodeCreatedAt: null,
+        isPasswordChanged: true,
+        loginRetries: 0,
+        accountLockedUntil: null,
+      },
+    });
+
+    await this.helpers.createUserLog(
+      email,
+      `Password reset via token at ${new Date().toISOString()}`,
+      Priority.HIGH,
+    );
+
+    await this.helpers.createSystemLog(
+      `Password reset via token for user: ${email} at ${new Date().toISOString()}`,
+      Priority.HIGH,
+    );
+
+    return { message: 'Password reset successful. You can now log in.' };
+  }
+
+  /**
+   * Change password — logged-in user only
+   * If it's the first-time password change (isPasswordChanged = false),
+   * old password is not strictly required (e.g. admin-created accounts with temp passwords).
+   * Otherwise, old password is validated.
+   */
+  async changePassword(
+    email: string,
+    newPassword: string,
+    oldPassword?: string,
+  ): Promise<{ message: string }> {
+    if (!newPassword) {
+      throw new BadRequestException('New password is required');
     }
 
-    // hash new password
-    const salt = await bcrypt.genSalt(10);
-    const hash = await bcrypt.hash(newPassword, salt);
+    const user = await this.helpers.getUser(email);
 
-    // update password + clear reset state
+    // If user has already changed password before, old password is mandatory
+    if (user.isPasswordChanged) {
+      if (!oldPassword) {
+        throw new BadRequestException(
+          'Current password is required to change your password',
+        );
+      }
+
+      const passwordMatch = await bcrypt.compare(oldPassword, user.password!);
+      if (!passwordMatch) {
+        throw new UnauthorizedException('Current password is incorrect');
+      }
+    }
+
+    // Hash new password
+    const hash = await bcrypt.hash(newPassword, 10);
+
     await this.prisma.user.update({
       where: { email },
       data: {
@@ -465,18 +534,17 @@ export class AuthService {
       },
     });
 
-    // logs (non-blocking recommended)
     await this.helpers.createUserLog(
       email,
-      `Password reset via code at ${new Date().toISOString()}`,
+      `Password changed at ${new Date().toISOString()}`,
       Priority.MEDIUM,
     );
 
     await this.helpers.createSystemLog(
-      `Password reset via code for user: ${email} at ${new Date().toISOString()}`,
+      `Password changed for user: ${email} at ${new Date().toISOString()}`,
       Priority.MEDIUM,
     );
 
-    return { message: 'Password reset successful' };
+    return { message: 'Password changed successfully' };
   }
 }

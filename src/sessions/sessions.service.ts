@@ -24,8 +24,27 @@ export class SessionsService {
     private readonly helpers: HelpersService,
   ) {}
 
+  /**
+   * Generate attendance link from session ID
+   */
+  private generateAttendanceLink(sessionId: string): string {
+    const environment = process.env.NODE_ENV || 'development';
+    const kioskUrl =
+      environment === 'production'
+        ? process.env.KIOSK_MODE_URL || 'https://face.comas.edu.gh/kiosk'
+        : process.env.DEV_KIOSK_MODE_URL || 'http://localhost:5175/kiosk';
+    return `${kioskUrl}/${sessionId}`;
+  }
+
   async createSession(payload: Partial<SessionsDto>, email: string) {
     const user = await this.helpers.getUser(email);
+
+    // Only REPs can create sessions
+    if (user.role !== Role.REP) {
+      throw new ForbiddenException(
+        'Only student representatives can create sessions',
+      );
+    }
 
     if (!payload.name || !payload.type) {
       throw new BadRequestException(
@@ -33,12 +52,13 @@ export class SessionsService {
       );
     }
 
-    if (user.role === Role.REP && !payload.lecturerId) {
+    // REPs must select lecturer and module for the session
+    if (!payload.lecturerId) {
       throw new BadRequestException('Please select a lecturer for the session');
     }
 
-    if (user.role === Role.LECTURER && !payload.courseId) {
-      throw new BadRequestException('Please choose a course for the session');
+    if (!payload.moduleId) {
+      throw new BadRequestException('Please select a module for the session');
     }
 
     if (!payload.mode) {
@@ -81,202 +101,229 @@ export class SessionsService {
       );
     }
 
-    if (user.role === Role.REP) {
-      const lecturer = await this.prisma.lecturer.findUnique({
-        where: {
-          id: payload.lecturerId,
+    // Verify lecturer exists and get user info for SMS
+    const lecturer = await this.prisma.lecturer.findUnique({
+      where: {
+        id: payload.lecturerId,
+      },
+      include: {
+        user: {
+          select: { name: true, phone: true },
         },
-      });
-
-      if (!lecturer) {
-        throw new NotFoundException('Lecturer not found');
-      }
-
-      const rep = await this.prisma.student.findUnique({
-        where: {
-          userId: user.id,
+        thresholds: {
+          select: { lateThreshold: true, absentThreshold: true },
         },
-        include: {
-          courseReps: {
-            include: {
-              thresholds: {
-                select: { lateThreshold: true, absentThreshold: true },
-              },
+      },
+    });
+
+    if (!lecturer) {
+      throw new NotFoundException('Lecturer not found');
+    }
+
+    // Verify user is a student rep
+    const rep = await this.prisma.student.findUnique({
+      where: {
+        userId: user.id,
+      },
+      include: {
+        studentRep: {
+          include: {
+            thresholds: {
+              select: { lateThreshold: true, absentThreshold: true },
             },
           },
         },
+      },
+    });
+
+    if (!rep?.studentRep) {
+      throw new NotFoundException('User not a student representative');
+    }
+
+    // Validate course (optional now)
+    let course: any = null;
+    if (payload.courseId) {
+      course = await this.prisma.course.findUnique({
+        where: { id: payload.courseId },
       });
-
-      const uniqueRep = await this.prisma.courseRep.findFirst({
-        where: {
-          studentId: rep?.id,
-          course: {
-            lecturers: {
-              some: {
-                lecturerId: lecturer.id,
-              },
-            },
-          },
-        },
-        include: {
-          thresholds: {
-            select: { lateThreshold: true, absentThreshold: true },
-          },
-        },
-      });
-
-      if (!rep?.courseReps || rep.courseReps.length === 0) {
-        throw new NotFoundException('User not a course representative');
-      }
-
-      const isAuthorized = await this.prisma.courseLecturer.findFirst({
-        where: {
-          lecturerId: lecturer.id ?? payload.lecturerId,
-          courseId: { in: rep.courseReps.map((r) => r.courseId) },
-        },
-        include: {
-          lecturer: {
-            select: {
-              hourlyRate: true,
-              creditHours: true,
-            },
-          },
-        },
-      });
-
-      //check if session start time and end time does not exceed credit hours
-      if (isAuthorized) {
-        const sessionDurationHours =
-          (sessionEndTime.getTime() - sessionStartTime.getTime()) /
-          (1000 * 60 * 60);
-
-        if (sessionDurationHours > isAuthorized.lecturer.creditHours) {
-          throw new BadRequestException(
-            "Session duration exceeds lecturer's credit hours",
-          );
-        }
-      }
-
-      if (!isAuthorized) {
-        throw new ForbiddenException(
-          'You are not authorized to create session for this lecturer',
-        );
-      }
-
-      const sessionToken = this.helpers.generateRandomCode(12);
-
-      //create session for rep
-      const transaction = await this.prisma.$transaction(async (tx) => {
-        const session = await tx.session.create({
-          data: {
-            name: sessionName,
-            type: type,
-            mode: mode,
-            token: sessionToken,
-            lecturer: {
-              connect: { id: lecturer.id },
-            },
-            startTime: sessionStartTime,
-            endTime: sessionEndTime,
-            lateThreshold: uniqueRep?.thresholds?.lateThreshold,
-            absentThreshold: uniqueRep?.thresholds?.absentThreshold,
-            createdBy: {
-              connect: { id: user.id },
-            },
-          },
-        });
-
-        return {
-          session,
-        };
-      });
-
-      return { success: true, data: transaction.session };
-    } else if (user.role === Role.LECTURER) {
-      const course = await this.prisma.course.findUnique({
-        where: {
-          id: payload.courseId,
-        },
-      });
-
       if (!course) {
         throw new NotFoundException('Course not found');
       }
+    }
 
-      const lecturer = await this.prisma.lecturer.findUnique({
-        where: {
-          userId: user.id,
-        },
+    // Validate module (required)
+    const module = await this.prisma.module.findUnique({
+      where: { id: payload.moduleId },
+    });
+    if (!module) {
+      throw new NotFoundException('Module not found');
+    }
+
+    // Validate subtopic if provided
+    let subtopic: any = null;
+    if (payload.subtopicId) {
+      subtopic = await this.prisma.subtopic.findUnique({
+        where: { id: payload.subtopicId },
+      });
+      if (!subtopic) {
+        throw new NotFoundException('Subtopic not found');
+      }
+      // Verify subtopic belongs to the specified module
+      if (subtopic.moduleId !== payload.moduleId) {
+        throw new BadRequestException(
+          'Subtopic does not belong to the specified module',
+        );
+      }
+    }
+
+    // Validate timetable slot if provided
+    if (payload.timetableSlotId) {
+      const slot = await this.prisma.timetableSlot.findUnique({
+        where: { id: payload.timetableSlotId },
+      });
+      if (!slot) {
+        throw new NotFoundException('Timetable slot not found');
+      }
+    }
+
+    const sessionToken = this.helpers.generateRandomCode(12);
+
+    // Use rep's thresholds or lecturer's thresholds
+    const thresholds = rep.studentRep.thresholds || lecturer.thresholds;
+
+    // Build session data
+    const sessionData: any = {
+      name: sessionName,
+      type: type,
+      mode: mode,
+      token: sessionToken,
+      location: payload.location,
+      lecturer: {
+        connect: { id: lecturer.id },
+      },
+      module: {
+        connect: { id: module.id },
+      },
+      startTime: sessionStartTime,
+      endTime: sessionEndTime,
+      lateThreshold: thresholds?.lateThreshold,
+      absentThreshold: thresholds?.absentThreshold,
+      createdBy: {
+        connect: { id: user.id },
+      },
+      // Geofencing fields (optional)
+      latitude: payload.latitude,
+      longitude: payload.longitude,
+      geofenceRadius: payload.geofenceRadius ?? 10,
+      week: payload.week,
+    };
+
+    // Add optional relations
+    if (course) {
+      sessionData.course = { connect: { id: course.id } };
+    }
+    if (payload.subtopicId) {
+      sessionData.subtopic = { connect: { id: payload.subtopicId } };
+    }
+    if (payload.timetableSlotId) {
+      sessionData.timetableSlot = { connect: { id: payload.timetableSlotId } };
+    }
+
+    // Create session
+    const transaction = await this.prisma.$transaction(async (tx) => {
+      const session = await tx.session.create({
+        data: sessionData,
       });
 
-      if (!lecturer) {
-        throw new NotFoundException('Lecturer profile not found');
+      return {
+        session,
+      };
+    });
+
+    // Generate attendance link using session ID
+    const attendanceLink = this.generateAttendanceLink(transaction.session.id);
+
+    // Update session with attendance link
+    await this.prisma.session.update({
+      where: { id: transaction.session.id },
+      data: { attendanceLink },
+    });
+
+    // Send SMS to lecturer (don't fail session creation if SMS fails)
+    let smsSentToLecturer = false;
+    if (lecturer.user.phone) {
+      try {
+        const smsMessage = `Hi ${lecturer.user.name}, a session '${sessionName}' for ${module.name} (${module.code}) has been started by ${user.name}. Check attendance here: ${attendanceLink}`;
+        await this.helpers.sendSMS([lecturer.user.phone], smsMessage);
+        smsSentToLecturer = true;
+        // Update session to mark SMS as sent
+        await this.prisma.session.update({
+          where: { id: transaction.session.id },
+          data: { smsSentToLecturer: true },
+        });
+      } catch (error) {
+        this.logger.error(
+          `Failed to send SMS to lecturer ${lecturer.user.name}: ${error}`,
+        );
       }
+    }
 
-      const assignment = await this.prisma.courseLecturer.findFirst({
-        where: {
-          lecturerId: lecturer.id,
-          courseId: payload.courseId,
-        },
-        include: {
-          lecturer: {
-            select: {
-              userId: true,
-              id: true,
-              thresholds: {
-                select: { lateThreshold: true, absentThreshold: true },
-              },
-            },
-          },
-        },
-      });
+    // Send SMS to students based on subtopic's module level (don't fail session creation if SMS fails)
+    let studentsSmsCount = 0;
+    if (subtopic) {
+      try {
+        // Get the module's level from the subtopic
+        const moduleLevel = module.level;
 
-      if (!assignment) {
-        throw new ForbiddenException('Lecturer not assigned to this course');
-      }
-
-      const sessionToken = this.helpers.generateRandomCode(12);
-
-      const transaction = await this.prisma.$transaction(async (tx) => {
-        //create session for lecturer
-        const session = await tx.session.create({
-          data: {
-            name: sessionName,
-            type: type,
-            mode: mode,
-            token: sessionToken,
-            course: {
-              connect: { id: course.id },
-            },
-            startTime: sessionStartTime,
-            endTime: sessionEndTime,
-            lateThreshold: assignment.lecturer.thresholds?.lateThreshold,
-            absentThreshold: assignment.lecturer.thresholds?.absentThreshold,
-            createdBy: {
-              connect: { id: user.id },
-            },
+        // Fetch all students with the same level as the module
+        const students = await this.prisma.student.findMany({
+          where: { level: moduleLevel },
+          include: {
+            user: { select: { name: true, phone: true } },
           },
         });
-        return {
-          session,
-        };
-      });
 
-      await this.helpers.createUserLog(
-        user.email,
-        `Session ${sessionName} created successfully on ${new Date().toISOString()}`,
-        Priority.MEDIUM,
-      );
+        // Collect valid phone numbers
+        const studentPhones: string[] = [];
+        for (const student of students) {
+          if (student.user.phone) {
+            studentPhones.push(student.user.phone);
+          }
+        }
 
-      await this.helpers.createSystemLog(
-        `Session ${sessionName} created by ${user.name} on ${new Date().toISOString()}`,
-        Priority.MEDIUM,
-      );
-
-      return { success: true, data: transaction.session };
-    } else {
-      throw new ForbiddenException('Access forbidden for this action');
+        if (studentPhones.length > 0) {
+          const studentSmsMessage = `Session '${sessionName}' for ${module.name} (${module.code}) - ${subtopic.name} has started. Mark your attendance here: ${attendanceLink}`;
+          await this.helpers.sendSMS(studentPhones, studentSmsMessage);
+          studentsSmsCount = studentPhones.length;
+          this.logger.log(
+            `SMS sent to ${studentsSmsCount} level ${moduleLevel} students for session ${sessionName}`,
+          );
+        }
+      } catch (error) {
+        this.logger.error(`Failed to send SMS to students: ${error}`);
+      }
     }
+
+    await this.helpers.createUserLog(
+      user.email,
+      `Session ${sessionName} created successfully on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+
+    await this.helpers.createSystemLog(
+      `Session ${sessionName} created by rep ${user.name} on ${new Date().toISOString()}`,
+      Priority.MEDIUM,
+    );
+
+    return {
+      success: true,
+      data: {
+        ...transaction.session,
+        attendanceLink,
+        smsSentToLecturer,
+        studentsSmsCount,
+      },
+    };
   }
 
   async closeSession(sessionId: string, email: string) {
@@ -345,6 +392,7 @@ export class SessionsService {
       include: {
         createdBy: true,
         lecturer: true,
+        module: true,
         course: {
           include: {
             _count: {
@@ -405,9 +453,9 @@ export class SessionsService {
   async getSessionCreatorSessions(email: string) {
     const user = await this.helpers.getUser(email);
 
-    if (user.role !== Role.LECTURER && user.role !== Role.REP) {
+    if (user.role !== Role.REP) {
       throw new ForbiddenException(
-        'Only lecturers and course representatives can access their sessions',
+        'Only student representatives can access their sessions',
       );
     }
 
@@ -416,8 +464,10 @@ export class SessionsService {
         createdBy: { id: user.id },
       },
       include: {
+        subtopic: true,
         createdBy: { select: { id: true, email: true, name: true } },
         lecturer: true,
+        module: true,
         course: {
           include: {
             _count: {
@@ -561,26 +611,32 @@ export class SessionsService {
       throw new ForbiddenException('Cannot toggle mode of a closed session');
     }
 
-    if (session.mode === SessionMode.CHECK_OUT) {
-      throw new BadRequestException('Session is already in CHECK_OUT mode');
+    // Bidirectional toggle: CHECK_IN <-> CHECK_OUT
+    const currentMode = session.mode;
+    let newMode: SessionMode;
+
+    if (currentMode === SessionMode.CHECK_IN) {
+      // Toggling TO CHECK_OUT - enforce grace period
+      if (!session.endTime) {
+        throw new ForbiddenException('Session end time is not set');
+      }
+
+      const GRACE_MINUTES = 15;
+      const now = Date.now();
+      const graceDeadline =
+        session.endTime.getTime() + GRACE_MINUTES * 60 * 1000;
+
+      if (now > graceDeadline) {
+        throw new ForbiddenException(
+          `CHECK_OUT can only be enabled within ${GRACE_MINUTES} minutes after session end time`,
+        );
+      }
+
+      newMode = SessionMode.CHECK_OUT;
+    } else {
+      // Toggling back to CHECK_IN - no grace period restriction
+      newMode = SessionMode.CHECK_IN;
     }
-
-    if (!session.endTime) {
-      throw new ForbiddenException('Session end time is not set');
-    }
-
-    const GRACE_MINUTES = 15;
-
-    const now = Date.now();
-    const graceDeadline = session.endTime.getTime() + GRACE_MINUTES * 60 * 1000;
-
-    if (now > graceDeadline) {
-      throw new ForbiddenException(
-        `CHECK_OUT can only be enabled within ${GRACE_MINUTES} minutes after session end time`,
-      );
-    }
-
-    const newMode = SessionMode.CHECK_OUT;
 
     await this.prisma.session.update({
       where: { id: sessionId },
@@ -593,16 +649,20 @@ export class SessionsService {
 
     await this.helpers.createUserLog(
       user.email,
-      `Session ${session.name} mode changed to CHECK_OUT on ${new Date().toISOString()}`,
+      `Session ${session.name} mode changed to ${newMode} on ${new Date().toISOString()}`,
       Priority.MEDIUM,
     );
 
     await this.helpers.createSystemLog(
-      `Session ${session.name} mode changed to CHECK_OUT by ${user.name} on ${new Date().toISOString()}`,
+      `Session ${session.name} mode changed to ${newMode} by ${user.name} on ${new Date().toISOString()}`,
       Priority.MEDIUM,
     );
 
-    return { success: true, message: 'Session mode updated successfully' };
+    return {
+      success: true,
+      message: `Session mode updated to ${newMode} successfully`,
+      mode: newMode,
+    };
   }
 
   async approveSession(sessionId: string, email: string) {
@@ -755,5 +815,188 @@ export class SessionsService {
       Priority.MEDIUM,
     );
     return { success: true, message: 'Session deleted successfully' };
+  }
+
+  async generateQrCode(sessionId: string) {
+    const image = await this.helpers.generateQRCode(sessionId);
+    return {
+      message: 'QR Code generated successfully',
+      data: image,
+    };
+  }
+
+  async getSessionById(sessionId: string) {
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      include: {
+        subtopic: true,
+        createdBy: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+          },
+        },
+        lecturer: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            },
+          },
+        },
+        course: {
+          include: {
+            _count: {
+              select: { enrollments: true },
+            },
+          },
+        },
+        attendances: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                student: {
+                  select: {
+                    studentId: true,
+                    matricNo: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Session not found');
+    }
+
+    return {
+      success: true,
+      data: session,
+    };
+  }
+
+  /**
+   * Get session info by session ID (for SMS link access)
+   */
+  async getSessionByLink(sessionId: string) {
+    if (!sessionId) {
+      throw new BadRequestException('Session ID is required');
+    }
+
+    const session = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      include: {
+        module: { select: { name: true, code: true } },
+        subtopic: {
+          include: { lecturer: true },
+        },
+        lecturer: {
+          include: {
+            user: { select: { name: true } },
+          },
+        },
+      },
+    });
+
+    if (!session) {
+      throw new NotFoundException('Session not found');
+    }
+
+    // Return session info without exposing exact coordinates
+    return {
+      success: true,
+      data: {
+        id: session.id,
+        name: session.name,
+        moduleName: session.module?.name,
+        moduleCode: session.module?.code,
+        subtopicName: session.subtopic?.name,
+        lecturerName: session.lecturer?.user?.name,
+        mode: session.mode,
+        status: session.status,
+        startTime: session.startTime,
+        endTime: session.endTime,
+        geofenceRadius: session.geofenceRadius,
+        hasGeofence: session.latitude != null && session.longitude != null,
+        location: session.location,
+      },
+    };
+  }
+
+  /**
+   * Get all sessions assigned to a lecturer
+   */
+  async getLecturerSessions(userId: string) {
+    // Find the lecturer record for this user
+    const lecturer = await this.prisma.lecturer.findUnique({
+      where: { userId },
+    });
+
+    if (!lecturer) {
+      return { success: true, data: [] };
+    }
+
+    const sessions = await this.prisma.session.findMany({
+      where: { lecturerId: lecturer.id },
+      include: {
+        module: {
+          select: { id: true, name: true, code: true, level: true },
+        },
+        subtopic: {
+          include: { lecturer: true },
+        },
+        lecturer: {
+          include: {
+            user: { select: { id: true, name: true, email: true } },
+          },
+        },
+        createdBy: {
+          select: { id: true, name: true, email: true },
+        },
+        attendances: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                student: {
+                  select: { studentId: true, matricNo: true },
+                },
+              },
+            },
+          },
+        },
+        course: {
+          include: {
+            enrollments: {
+              include: {
+                student: {
+                  include: {
+                    user: { select: { id: true, name: true, email: true } },
+                  },
+                },
+              },
+            },
+            _count: {
+              select: { enrollments: true },
+            },
+          },
+        },
+      },
+      orderBy: { startTime: 'desc' },
+    });
+
+    return { success: true, data: sessions };
   }
 }

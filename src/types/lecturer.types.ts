@@ -6,5 +6,34 @@ export interface LecturerEarning {
   staffNo: string | null;
   hourlyRate: number;
   totalHours: number;
-  earnings: number;
+  regularHours?: number;
+  overtimeHours?: number;
+  overtimeRate?: number;
+  regularEarnings?: number;
+  overtimeEarnings?: number;
+  grossEarnings?: number;
+  taxDeduction?: number;
+  taxRate?: number;
+  earnings: number; // Net earnings after tax
+  sessions?: {
+    sessionId: string;
+    sessionName: string;
+    hours: number;
+    regularHours?: number;
+    overtimeHours?: number;
+    date?: Date;
+  }[];
+}
+
+export interface PayrollPeriod {
+  year?: number;
+  month?: number;
+  startDate: Date;
+  endDate: Date;
+}
+
+export interface PeriodPayrollResponse {
+  period: PayrollPeriod;
+  earnings?: LecturerEarning[];
+  payroll?: LecturerEarning;
 }

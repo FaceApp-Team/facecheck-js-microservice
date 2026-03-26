@@ -8,43 +8,47 @@ datasource db {
 }
 
 model User {
-  id                       String        @id @default(cuid())
-  email                    String        @unique
+  id                       String          @id @default(cuid())
+  email                    String          @unique
   name                     String
-  passwordResetCode        String?       @map("password_reset_code")
-  resetCodeCreatedAt       DateTime?     @map("reset_code_created_at")
-  lastLoginAt              DateTime?     @map("last_login_at")
-  lastLoginIp              String?       @map("last_login_ip")
-  embeddingStatus          ImageStatus   @default(PENDING) @map("embedding_status")
-  ipAddress                String?       @map("ip_address")
-  loginRetries             Int?          @default(0) @map("login_retries")
-  accountStatus            AccountStatus @default(ACTIVE) @map("account_status")
-  phone                    String
-  verificationCodeAttempts Int?          @default(0) @map("verification_code_attempts")
-  accountLockedUntil       DateTime?     @map("account_locked_until")
-  emailVerificationRetries Int?          @default(0) @map("email_verification_retries")
-  phoneVerificationRetries Int?          @default(0) @map("phone_verification_retries")
-  emailVerificationCode    String?       @map("email_verification_code")
-  phoneVerificationCode    String?       @map("phone_verification_code")
-  emailCodeCreatedAt       DateTime?     @map("email_code_created_at")
-  phoneCodeCreatedAt       DateTime?     @map("phone_code_created_at")
   role                     Role
-  isPasswordChanged        Boolean       @default(false) @map("is_password_changed")
   password                 String
-  isActive                 Boolean       @default(false) @map("is_active")
-  student                  Student?
-  profilePicture           String?       @map("profile_picture")
-  lecturer                 Lecturer?
-  createdAt                DateTime      @default(now()) @map("created_at")
-  updatedAt                DateTime      @updatedAt @map("updated_at")
-  imageUrl                 String?       @map("image_url")
-  imageStatus              ImageStatus?  @default(PENDING) @map("image_status")
-  faceEmbedding            String?       @map("face_embedding")
-  sessions                 Session[]
-  attendances              Attendance[]
-  logs                     Logs[]
-  staff                    Staff?
+  isActive                 Boolean         @default(false) @map("is_active")
+  createdAt                DateTime        @default(now()) @map("created_at")
+  updatedAt                DateTime        @updatedAt @map("updated_at")
+  phone                    String
+  emailCodeCreatedAt       DateTime?       @map("email_code_created_at")
+  phoneCodeCreatedAt       DateTime?       @map("phone_code_created_at")
+  accountStatus            AccountStatus   @default(ACTIVE) @map("account_status")
+  accountLockedUntil       DateTime?       @map("account_locked_until")
+  emailVerificationCode    String?         @map("email_verification_code")
+  emailVerificationRetries Int?            @default(0) @map("email_verification_retries")
+  ipAddress                String?         @map("ip_address")
+  loginRetries             Int?            @default(0) @map("login_retries")
+  phoneVerificationCode    String?         @map("phone_verification_code")
+  phoneVerificationRetries Int?            @default(0) @map("phone_verification_retries")
+  verificationCodeAttempts Int?            @default(0) @map("verification_code_attempts")
+  lastLoginAt              DateTime?       @map("last_login_at")
+  lastLoginIp              String?         @map("last_login_ip")
+  passwordResetCode        String?         @map("password_reset_code")
+  resetCodeCreatedAt       DateTime?       @map("reset_code_created_at")
+  faceEmbedding            String?         @map("face_embedding")
+  imageUrl                 String?         @map("image_url")
+  imageStatus              ImageStatus?    @default(PENDING) @map("image_status")
+  embeddingStatus          ImageStatus     @default(PENDING) @map("embedding_status")
+  isPasswordChanged        Boolean         @default(false) @map("is_password_changed")
+  profilePicture           String?         @map("profile_picture")
   admin                    Admin?
+  attendances              Attendance[]
+  lecturer                 Lecturer?
+  logs                     Logs[]
+  createdModules           Module[]        @relation("ModuleCreator")
+  sessions                 Session[]
+  staff                    Staff?
+  student                  Student?
+  subtopicsAsLecturer      Subtopic[]      @relation("SubtopicLecturer")
+  timetableSlotsAsLecturer TimetableSlot[] @relation("SlotLecturer")
+  createdTimetables        Timetable[]     @relation("TimetableCreator")
 
   @@index([email, phone])
   @@index([accountStatus])
@@ -60,27 +64,99 @@ model Course {
   id          String             @id @default(cuid())
   code        String             @unique
   title       String
-  description String?
-  creditHours Int?               @default(0) @map("credit_hours")
-  enrollments CourseEnrollment[]
-  lecturers   CourseLecturer[]
-  reps        CourseRep[]
   createdAt   DateTime           @default(now()) @map("created_at")
   updatedAt   DateTime           @updatedAt @map("updated_at")
+  creditHours Int?               @default(0) @map("credit_hours")
+  description String?
+  moduleId    String?            @map("module_id")
+  enrollments CourseEnrollment[]
+  lecturers   CourseLecturer[]
+  module      Module?            @relation(fields: [moduleId], references: [id])
   sessions    Session[]
 
+  @@index([moduleId])
   @@map("courses")
 }
 
+model Subtopic {
+  id             String          @id @default(cuid())
+  moduleId       String          @map("module_id")
+  name           String
+  lecturerId     String?         @map("lecturer_id")
+  lecturerName   String?         @map("lecturer_name")
+  weeks          Int             @default(1)
+  hoursPerWeek   Int             @default(1) @map("hours_per_week")
+  order          Int             @default(0)
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+  lecturer       User?           @relation("SubtopicLecturer", fields: [lecturerId], references: [id])
+  module         Module          @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  timetableSlots TimetableSlot[]
+  sessions       Session[]
+
+  @@index([moduleId, order])
+  @@index([lecturerId])
+  @@map("subtopics")
+}
+
+model Timetable {
+  id           String          @id @default(cuid())
+  moduleId     String          @map("module_id")
+  level        Int
+  semester     Int
+  academicYear String          @map("academic_year")
+  totalWeeks   Int             @default(4) @map("total_weeks")
+  startDate    DateTime?       @map("start_date")
+  endDate      DateTime?       @map("end_date")
+  createdById  String?         @map("created_by")
+  createdAt    DateTime        @default(now()) @map("created_at")
+  updatedAt    DateTime        @updatedAt @map("updated_at")
+  slots        TimetableSlot[]
+  createdBy    User?           @relation("TimetableCreator", fields: [createdById], references: [id])
+  module       Module          @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@unique([moduleId, academicYear])
+  @@index([moduleId])
+  @@index([level, semester, academicYear])
+  @@map("timetables")
+}
+
+model TimetableSlot {
+  id           String       @id @default(cuid())
+  timetableId  String       @map("timetable_id")
+  moduleId     String       @map("module_id")
+  subtopicId   String?      @map("subtopic_id")
+  day          DayOfWeek
+  startTime    String       @map("start_time")
+  endTime      String       @map("end_time")
+  activityType ActivityType @default(LECTURE) @map("activity_type")
+  lecturerId   String?      @map("lecturer_id")
+  lecturerName String?      @map("lecturer_name")
+  venue        String?
+  week         Int          @default(1)
+  colSpan      Int          @default(1) @map("col_span")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+  lecturer     User?        @relation("SlotLecturer", fields: [lecturerId], references: [id])
+  module       Module       @relation(fields: [moduleId], references: [id])
+  subtopic     Subtopic?    @relation(fields: [subtopicId], references: [id])
+  timetable    Timetable    @relation(fields: [timetableId], references: [id], onDelete: Cascade)
+  sessions     Session[]
+
+  @@index([timetableId, week])
+  @@index([timetableId, week, day, startTime])
+  @@index([subtopicId])
+  @@index([lecturerId])
+  @@map("timetable_slots")
+}
+
 model CourseEnrollment {
-  id        String @id @default(cuid())
-  studentId String @map("student_id")
-  courseId  String @map("course_id")
-
-  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  course  Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
-
+  id         String   @id @default(cuid())
+  studentId  String   @map("student_id")
+  courseId   String   @map("course_id")
   enrolledAt DateTime @default(now())
+  course     Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  student    Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
   @@unique([studentId, courseId])
   @@index([studentId])
@@ -92,23 +168,21 @@ model Staff {
   id            String   @id @default(cuid())
   userId        String   @unique @map("user_id")
   staffNo       String   @unique @map("staff_no")
-  recipientCode String?  @map("recipient_code")
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
+  recipientCode String?  @map("recipient_code")
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("staffs")
 }
 
 model CourseLecturer {
-  id         String @id @default(cuid())
-  lecturerId String @map("lecturer_id")
-  courseId   String @map("course_id")
-
-  lecturer Lecturer @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
-  course   Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-
+  id         String   @id @default(cuid())
+  lecturerId String   @map("lecturer_id")
+  courseId   String   @map("course_id")
   assignedAt DateTime @default(now())
+  course     Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lecturer   Lecturer @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
 
   @@unique([lecturerId, courseId])
   @@index([lecturerId])
@@ -116,47 +190,71 @@ model CourseLecturer {
   @@map("course_lecturers")
 }
 
-model CourseRep {
+model StudentRep {
   id         String      @id @default(cuid())
-  studentId  String      @map("student_id")
-  courseId   String      @map("course_id")
-  student    Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  course     Course      @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  thresholds Thresholds?
+  studentId  String      @unique @map("student_id")
   assignedAt DateTime    @default(now()) @map("assigned_at")
   updatedAt  DateTime    @updatedAt @map("updated_at")
+  student    Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  thresholds Thresholds?
 
-  @@unique([studentId, courseId])
-  @@map("course_reps")
+  @@index([studentId])
+  @@map("student_reps")
 }
 
 model Student {
   id          String             @id @default(cuid())
   userId      String             @unique @map("user_id")
   matricNo    String?            @unique
-  studentId   String             @unique @map("student_id")
-  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  enrollments CourseEnrollment[]
   createdAt   DateTime           @default(now()) @map("created_at")
   updatedAt   DateTime           @updatedAt @map("updated_at")
-  courseReps  CourseRep[]
+  studentId   String             @unique @map("student_id")
+  level       Int                @default(100)
+  enrollments CourseEnrollment[]
+  studentRep  StudentRep?
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([studentId])
   @@map("students")
 }
 
+model Module {
+  id             String          @id @default(cuid())
+  name           String
+  code           String          @unique
+  description    String?
+  credits        Int             @default(3)
+  level          Int             @default(100)
+  semester       Int             @default(1)
+  order          Int             @default(0)
+  duration       Int?            @default(12)
+  createdById    String?         @map("created_by")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+  courses        Course[]
+  createdBy      User?           @relation("ModuleCreator", fields: [createdById], references: [id])
+  sessions       Session[]
+  subtopics      Subtopic[]
+  timetableSlots TimetableSlot[]
+  timetables     Timetable[]
+
+  @@index([code])
+  @@index([level, semester, order])
+  @@map("modules")
+}
+
 model Lecturer {
   id            String           @id @default(cuid())
   userId        String           @unique @map("user_id")
   staffNo       String?          @unique
-  recipientCode String?          @map("recipient_code")
-  hourlyRate    Float            @default(0.0) @map("hourly_rate")
-  creditHours   Int              @default(0) @map("credit_hours")
-  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  courses       CourseLecturer[]
   createdAt     DateTime         @default(now()) @map("created_at")
   updatedAt     DateTime         @updatedAt @map("updated_at")
+  hourlyRate    Float            @default(0.0) @map("hourly_rate")
+  recipientCode String?          @map("recipient_code")
+  creditHours   Int              @default(0) @map("credit_hours")
+  courses       CourseLecturer[]
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   sessions      Session[]
   thresholds    Thresholds?
 
@@ -166,53 +264,74 @@ model Lecturer {
 }
 
 model Session {
-  id              String        @id @default(cuid())
-  userId          String        @map("user_id")
-  location        String?
-  name            String
-  token           String        @unique
-  lecturerId      String?       @map("lecturer_id")
-  lecturer        Lecturer?     @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
-  course          Course?       @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  courseId        String?       @map("course_id")
-  startTime       DateTime      @default(now()) @map("start_time")
-  endTime         DateTime      @map("end_time")
-  mode            SessionMode   @default(CHECK_IN)
-  type            SessionType   @default(CLASS)
-  lateThreshold   Int           @default(30) @map("late_threshold") // in minutes
-  absentThreshold Int           @default(60) @map("absent_threshold") // in minutes
-  status          SessionStatus @default(OPEN)
-  createdBy       User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt       DateTime      @default(now()) @map("created_at")
-  updatedAt       DateTime      @updatedAt @map("updated_at")
-  attendances     Attendance[]
+  id                String         @id @default(cuid())
+  userId            String         @map("user_id")
+  token             String         @unique
+  courseId          String?        @map("course_id")
+  startTime         DateTime       @default(now()) @map("start_time")
+  endTime           DateTime       @map("end_time")
+  type              SessionType    @default(CLASS)
+  status            SessionStatus  @default(OPEN)
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+  absentThreshold   Int            @default(60) @map("absent_threshold")
+  lateThreshold     Int            @default(30) @map("late_threshold")
+  mode              SessionMode    @default(CHECK_IN)
+  lecturerId        String?        @map("lecturer_id")
+  location          String?
+  name              String
+  moduleId          String?        @map("module_id")
+  // Geofencing and subtopic linking fields
+  subtopicId        String?        @map("subtopic_id")
+  timetableSlotId   String?        @map("timetable_slot_id")
+  latitude          Float?
+  longitude         Float?
+  geofenceRadius    Int            @default(100) @map("geofence_radius")
+  attendanceLink    String?        @unique @map("attendance_link")
+  smsSentToLecturer Boolean        @default(false) @map("sms_sent_to_lecturer")
+  week              Int?
+  attendances       Attendance[]
+  course            Course?        @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lecturer          Lecturer?      @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+  module            Module?        @relation(fields: [moduleId], references: [id])
+  subtopic          Subtopic?      @relation(fields: [subtopicId], references: [id])
+  timetableSlot     TimetableSlot? @relation(fields: [timetableSlotId], references: [id])
+  createdBy         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([status])
   @@index([token])
   @@index([courseId])
+  @@index([moduleId])
   @@index([lecturerId])
   @@index([startTime])
   @@index([endTime])
   @@index([createdAt])
   @@index([userId, status])
   @@index([courseId, status])
+  @@index([subtopicId])
+  @@index([timetableSlotId])
   @@map("sessions")
 }
 
 model Attendance {
-  id           String           @id @default(cuid())
-  sessionId    String           @map("session_id")
-  userId       String           @map("user_id")
-  timestamp    DateTime         @default(now())
-  checkInTime  DateTime?        @map("check_in_time")
-  checkOutTime DateTime?        @map("check_out_time")
-  confidence   Float?
-  source       String? // kiosk, mobile, admin
-  status       AttendanceStatus @default(ABSENT)
-
-  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                  String           @id @default(cuid())
+  sessionId           String           @map("session_id")
+  userId              String           @map("user_id")
+  timestamp           DateTime         @default(now())
+  confidence          Float?
+  source              String?
+  status              AttendanceStatus @default(ABSENT)
+  checkInTime         DateTime?        @map("check_in_time")
+  checkOutTime        DateTime?        @map("check_out_time")
+  remarks             String?
+  // Geofencing fields
+  latitude            Float?
+  longitude           Float?
+  distanceFromSession Float?           @map("distance_from_session")
+  withinGeofence      Boolean          @default(true) @map("within_geofence")
+  session             Session          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user                User             @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, userId])
   @@index([sessionId])
@@ -235,15 +354,15 @@ model Kiosk {
 }
 
 model Thresholds {
-  id              String     @id @default(cuid())
-  lateThreshold   Int        @default(30) @map("late_threshold") // in minutes
-  absentThreshold Int        @default(60) @map("absent_threshold") // in minutes
-  createdAt       DateTime   @default(now()) @map("created_at")
-  lecturerId      String?    @unique @map("lecturer_id")
-  lecturer        Lecturer?  @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
-  updatedAt       DateTime   @updatedAt @map("updated_at")
-  courseReps      CourseRep? @relation(fields: [courseRepId], references: [id], onDelete: Cascade)
-  courseRepId     String?    @unique @map("course_rep_id")
+  id              String      @id @default(cuid())
+  lateThreshold   Int         @default(30) @map("late_threshold")
+  absentThreshold Int         @default(60) @map("absent_threshold")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  lecturerId      String?     @unique @map("lecturer_id")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+  studentRepId    String?     @unique @map("student_rep_id")
+  lecturer        Lecturer?   @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+  studentRep      StudentRep? @relation(fields: [studentRepId], references: [id], onDelete: Cascade)
 
   @@map("thresholds")
 }
@@ -252,12 +371,11 @@ model Logs {
   id        String             @id @default(cuid())
   userId    String?            @map("user_id")
   action    String
-  priority  Priority           @default(HIGH)
-  status    NotificationStatus @default(UNREAD)
   ipAddress String?            @map("ip_address")
   createdAt DateTime           @default(now()) @map("created_at")
-
-  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status    NotificationStatus @default(UNREAD)
+  priority  Priority           @default(HIGH)
+  user      User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([createdAt])
@@ -270,10 +388,10 @@ model Logs {
 model SystemLogs {
   id        String             @id @default(cuid())
   action    String
-  status    NotificationStatus @default(UNREAD)
   ipAddress String?            @map("ip_address")
-  priority  Priority           @default(MEDIUM)
   createdAt DateTime           @default(now()) @map("created_at")
+  status    NotificationStatus @default(UNREAD)
+  priority  Priority           @default(MEDIUM)
 
   @@map("system_logs")
 }
@@ -282,11 +400,34 @@ model Admin {
   id        String   @id @default(cuid())
   userId    String   @unique @map("user_id")
   adminNo   String   @unique @map("admin_no")
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("admins")
+}
+
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+}
+
+enum ActivityType {
+  LECTURE
+  PBL
+  SDL
+  TUTORIAL
+  PRACTICAL
+  CLIN_SKILLS
+  ANATOMY_PRACTICAL
+  BIOCHEMISTRY_PRACTICAL
+  SPORTS
+  COMMUNITY_VISIT
+  EXAM
+  OTHER
 }
 
 enum NotificationStatus {
@@ -307,16 +448,17 @@ enum AttendanceStatus {
   EXCUSED
   ABSENT
   CHECKED_IN
+  CHECKED_OUT
 }
 
 enum Role {
   ADMIN
-  OWNER
   SYSTEM_ADMIN
   LECTURER
   STAFF
   STUDENT
   REP
+  OWNER
 }
 
 enum SessionMode {

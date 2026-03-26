@@ -1,3 +1,5 @@
+import { ActivitiesModule } from './activities/activities.module';
+import { ActivitiesController } from './activities/activities.controller';
 import { JobsModule } from './jobs/jobs.module';
 import { AppController } from './app/app.controller';
 import { HealthModule } from './health/health.module';
@@ -30,7 +32,7 @@ import { JwtService } from '@nestjs/jwt';
 import { MailerModule } from '@nestjs-modules/mailer';
 import { EjsAdapter } from '@nestjs-modules/mailer/dist/adapters/ejs.adapter';
 import { BullModule } from '@nestjs/bullmq';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+// import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 
 import { join } from 'path';
 import { HttpModule } from '@nestjs/axios';
@@ -45,10 +47,11 @@ import { SystemService } from './app/app.service';
 import { TerminusModule } from '@nestjs/terminus';
 import { CacheModule } from '@nestjs/cache-manager';
 import { ScheduleModule } from '@nestjs/schedule';
-import { APP_GUARD } from '@nestjs/core';
+// import { APP_GUARD } from '@nestjs/core';
 
 @Module({
   imports: [
+    ActivitiesModule,
     JobsModule,
     CacheModule.register({
       ttl: 3600000,
@@ -66,14 +69,14 @@ import { APP_GUARD } from '@nestjs/core';
     ConsumersModule,
     UsersModule,
     ConfigModule.forRoot({ isGlobal: true, load: [appConfig] }),
-    ThrottlerModule.forRoot({
-      throttlers: [
-        {
-          ttl: 60000,
-          limit: 5,
-        },
-      ],
-    }),
+    // ThrottlerModule.forRoot({
+    //   throttlers: [
+    //     {
+    //       ttl: 60000,
+    //       limit: 5,
+    //     },
+    //   ],
+    // }),
     HttpModule,
     MulterModule.register({
       storage: memoryStorage(),
@@ -116,6 +119,7 @@ import { APP_GUARD } from '@nestjs/core';
     AuthModule,
   ],
   controllers: [
+    ActivitiesController,
     AppController,
     PayrollController,
     AttendanceController,
@@ -129,10 +133,10 @@ import { APP_GUARD } from '@nestjs/core';
   providers: [
     NotificationsService,
     CoursesService,
-    {
-      provide: APP_GUARD,
-      useClass: ThrottlerGuard,
-    },
+    // {
+    //   provide: APP_GUARD,
+    //   useClass: ThrottlerGuard,
+    // },
 
     AuthService,
     PrismaService,
