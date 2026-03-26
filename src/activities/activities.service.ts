@@ -845,6 +845,88 @@ export class ActivitiesService {
       },
     });
 
+    // If sessions were created from this slot, keep them in sync with slot updates.
+    const linkedSessions = await this.prisma.session.findMany({
+      where: { timetableSlotId: slotId },
+      select: { id: true, startTime: true, endTime: true },
+    });
+
+    if (linkedSessions.length > 0) {
+      const parseTime = (time: string): { hours: number; minutes: number } => {
+        const [hoursStr, minutesStr] = time.split(':');
+        const hours = Number(hoursStr);
+        const minutes = Number(minutesStr ?? '0');
+        if (
+          Number.isNaN(hours) ||
+          Number.isNaN(minutes) ||
+          hours < 0 ||
+          hours > 23 ||
+          minutes < 0 ||
+          minutes > 59
+        ) {
+          throw new BadRequestException(`Invalid time format: ${time}`);
+        }
+        return { hours, minutes };
+      };
+
+      const setTimeOnDate = (date: Date, time: string): Date => {
+        const { hours, minutes } = parseTime(time);
+        const adjusted = new Date(date);
+        adjusted.setHours(hours, minutes, 0, 0);
+        return adjusted;
+      };
+
+      await this.prisma.$transaction(
+        linkedSessions.map((session) => {
+          const data: {
+            startTime?: Date;
+            endTime?: Date;
+            week?: number;
+            location?: string | null;
+            lecturerId?: string | null;
+            subtopicId?: string | null;
+          } = {};
+
+          if (updated.startTime) {
+            data.startTime = setTimeOnDate(
+              session.startTime,
+              updated.startTime,
+            );
+          }
+
+          if (updated.endTime) {
+            const baseStart = data.startTime ?? session.startTime;
+            const adjustedEnd = setTimeOnDate(baseStart, updated.endTime);
+            data.endTime =
+              adjustedEnd <= baseStart
+                ? new Date(adjustedEnd.getTime() + 24 * 60 * 60 * 1000)
+                : adjustedEnd;
+          }
+
+          if (updated.week != null) {
+            data.week = updated.week;
+          }
+
+          if (dto.venue !== undefined) {
+            data.location = updated.venue;
+          }
+
+          if (dto.lecturerId !== undefined) {
+            data.lecturerId = updated.lecturerId;
+          }
+
+          if (dto.subtopicId !== undefined) {
+            data.subtopicId = updated.subtopicId;
+          }
+
+          return this.prisma.session.update({
+            where: { id: session.id },
+            data,
+          });
+        }),
+      );
+    }
+
     return {
       success: true,
       data: updated,

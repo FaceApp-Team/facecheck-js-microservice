@@ -464,6 +464,7 @@ export class SessionsService {
         createdBy: { id: user.id },
       },
       include: {
+        subtopic: true,
         createdBy: { select: { id: true, email: true, name: true } },
         lecturer: true,
         module: true,
@@ -828,6 +829,7 @@ export class SessionsService {
     const session = await this.prisma.session.findUnique({
       where: { id: sessionId },
       include: {
+        subtopic: true,
         createdBy: {
           select: {
             id: true,

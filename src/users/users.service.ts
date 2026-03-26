@@ -48,48 +48,64 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    if (!files || files.length === 0) {
-      throw new BadRequestException('Face images are required');
-    }
+    const hasFaceImages = Boolean(files && files.length > 0);
+    const hasStudentIdUpdate = Boolean(
+      studentId && studentId.trim().length > 0,
+    );
+    const hasLevelUpdate = level !== undefined && level !== null;
 
-    // Validate files BEFORE uploading
-    for (const file of files) {
-      this.helpers.checkFileSize(file);
-      if (!file.buffer || file.buffer === null) {
-        throw new BadRequestException('Invalid image file');
-      }
-    }
-
-    const imageUrls = await this.helpers.uploadImages(files);
-
-    if (!imageUrls || imageUrls.length === 0) {
-      throw new BadRequestException('Image upload failed');
-    }
-
-    try {
-      await this.helpers.enrollFace(user.id, imageUrls);
-    } catch (error) {
-      this.logger.error('Face enrollment failed', error);
+    if (!hasFaceImages && !hasStudentIdUpdate && !hasLevelUpdate) {
       throw new BadRequestException(
-        'Face enrollment failed. Please ensure the images are clear and try again.',
+        'Provide face images for enrollment or student details to update',
       );
     }
 
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
-        imageStatus: ImageStatus.UPLOADED,
-        imageUrl: imageUrls[0],
-        embeddingStatus: ImageStatus.COMPLETED,
-      },
-    });
+    let imageUrls: string[] = [];
+
+    if (hasFaceImages) {
+      // Validate files BEFORE uploading
+      for (const file of files) {
+        this.helpers.checkFileSize(file);
+        if (!file.buffer || file.buffer === null) {
+          throw new BadRequestException('Invalid image file');
+        }
+      }
+
+      imageUrls = await this.helpers.uploadImages(files);
+
+      if (!imageUrls || imageUrls.length === 0) {
+        throw new BadRequestException('Image upload failed');
+      }
+
+      try {
+        await this.helpers.enrollFace(user.id, imageUrls);
+      } catch (error) {
+        this.logger.error('Face enrollment failed', error);
+        throw new BadRequestException(
+          'Face enrollment failed. Please ensure the images are clear and try again.',
+        );
+      }
+
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          imageStatus: ImageStatus.UPLOADED,
+          imageUrl: imageUrls[0],
+          embeddingStatus: ImageStatus.COMPLETED,
+        },
+      });
+    }
 
     // Create or update student record with studentId and level
-    if (studentId) {
+    if (hasStudentIdUpdate) {
       if (user.student) {
         // Student already exists — update
-        const studentUpdateData: any = { studentId, matricNo: studentId };
-        if (level) {
+        const normalizedStudentId = studentId!.trim();
+        const studentUpdateData: any = {
+          studentId: normalizedStudentId,
+          matricNo: normalizedStudentId,
+        };
+        if (hasLevelUpdate) {
           studentUpdateData.level = level;
         }
         await this.prisma.student.update({
@@ -98,16 +114,17 @@ export class UsersService {
         });
       } else {
         // Student doesn't exist yet — create
+        const normalizedStudentId = studentId!.trim();
         await this.prisma.student.create({
           data: {
             user: { connect: { id: user.id } },
-            studentId,
-            matricNo: studentId,
-            level: level ?? 100,
+            studentId: normalizedStudentId,
+            matricNo: normalizedStudentId,
+            level: hasLevelUpdate ? level : 100,
           },
         });
       }
-    } else if (user.student && level) {
+    } else if (user.student && hasLevelUpdate) {
       // Only level provided for an existing student
       await this.prisma.student.update({
         where: { id: user.student.id },
@@ -116,13 +133,20 @@ export class UsersService {
     }
 
     await this.helpers.createSystemLog(
-      `Face enrolled for user ${user.email} on ${new Date().toISOString()}`,
+      `${
+        hasFaceImages ? 'Face enrolled' : 'Enrollment details updated'
+      } for user ${user.email} on ${new Date().toISOString()}`,
       Priority.MEDIUM,
     );
 
     return {
-      message: 'Face enrollment successful',
-      imageUrl: imageUrls[0],
+      message:
+        hasFaceImages && (hasStudentIdUpdate || hasLevelUpdate)
+          ? 'Face enrollment and details update successful'
+          : hasFaceImages
+            ? 'Face enrollment successful'
+            : 'Details update successful',
+      ...(hasFaceImages && { imageUrl: imageUrls[0] }),
     };
   }
 

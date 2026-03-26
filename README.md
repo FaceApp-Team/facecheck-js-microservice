@@ -207,6 +207,37 @@ nestjs-microservice/
 - Session-based attendance records
 - Attendance status management
 
+#### Manual Attendance API (Updated)
+
+- `POST /attendance/mark-manual`
+  - Payload fields:
+    - `sessionId: string`
+    - `userId: string`
+    - `status: CHECKED_IN | CHECKED_OUT | PRESENT | ABSENT | LATE | EXCUSED`
+    - `remarks?: string`
+    - `startTime?: ISO datetime` (maps to `checkInTime`)
+    - `endTime?: ISO datetime` (maps to `checkOutTime`)
+  - Behavior:
+    - Upserts by `sessionId + userId`
+    - `CHECKED_IN` sets `checkInTime` to `startTime` or `now`
+    - `CHECKED_OUT` sets `checkOutTime` to `endTime` or `now`
+    - If both `checkInTime` and `checkOutTime` exist, status resolves to `PRESENT`
+      except explicit `ABSENT/EXCUSED` set by `ADMIN/SYSTEM_ADMIN`
+    - Rejects invalid order where `checkOutTime < checkInTime`
+    - Rejects unknown session/user and unassigned lecturer actions without admin override
+    - Supports overtime tracking via `checkOutTime > session.endTime`
+  - Response includes:
+    - `id, sessionId, userId, status`
+    - `checkInTime, checkOutTime`
+    - `overtimeMinutes, overtimeHours` (when checkout exists)
+    - `source, remarks`
+
+- `POST /attendance/mark-bulk-manual`
+  - Accepts `sessionId` and `attendanceRecords[]`
+  - Each record supports `userId`, `status`, `remarks?`, `startTime?`, `endTime?`
+  - Supports `CHECKED_IN` and `CHECKED_OUT` in bulk
+  - Returns per-record `results` and `errors`
+
 ### 6. **Image Processing & Face Recognition**
 
 - Asynchronous image upload via BullMQ

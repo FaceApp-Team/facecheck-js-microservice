@@ -448,6 +448,7 @@ enum AttendanceStatus {
   EXCUSED
   ABSENT
   CHECKED_IN
+  CHECKED_OUT
 }
 
 enum Role {

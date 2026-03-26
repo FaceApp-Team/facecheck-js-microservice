@@ -104,12 +104,16 @@ export class AttendanceController {
     @Req() req: Request,
   ) {
     const email = (req.user as any)?.email;
+    const customStartTime = dto.startTime ? new Date(dto.startTime) : undefined;
+    const customEndTime = dto.endTime ? new Date(dto.endTime) : undefined;
     const response = await this.attendance.markManualAttendance(
       dto.sessionId,
       dto.userId,
       dto.status,
       dto.remarks,
       email,
+      customStartTime,
+      customEndTime,
     );
     return response;
   }

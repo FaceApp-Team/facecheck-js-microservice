@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -44,6 +45,98 @@ export class AttendanceService {
 
   private toRadians(degrees: number): number {
     return degrees * (Math.PI / 180);
+  }
+
+  private getOvertimeFromSession(
+    sessionEndTime: Date,
+    checkOutTime: Date | null,
+  ): { overtimeMinutes: number; overtimeHours: number } | null {
+    if (!checkOutTime) {
+      return null;
+    }
+
+    const overtimeMinutes = Math.max(
+      0,
+      Math.round((checkOutTime.getTime() - sessionEndTime.getTime()) / 60000),
+    );
+
+    return {
+      overtimeMinutes,
+      overtimeHours: Math.round((overtimeMinutes / 60) * 100) / 100,
+    };
+  }
+
+  private resolveManualStatus(
+    requestedStatus: AttendanceStatus,
+    checkInTime: Date | null,
+    checkOutTime: Date | null,
+    isAdminOverride: boolean,
+  ): AttendanceStatus {
+    const isExplicitAdminAbsence =
+      isAdminOverride &&
+      (requestedStatus === AttendanceStatus.ABSENT ||
+        requestedStatus === AttendanceStatus.EXCUSED);
+
+    if (checkInTime && checkOutTime && !isExplicitAdminAbsence) {
+      return AttendanceStatus.PRESENT;
+    }
+
+    return requestedStatus;
+  }
+
+  private getManualActionType(
+    requestedStatus: AttendanceStatus,
+    hasManualTimeEdit: boolean,
+  ): string {
+    if (hasManualTimeEdit) {
+      return 'manual_edit_time';
+    }
+
+    if (requestedStatus === AttendanceStatus.CHECKED_IN) {
+      return 'manual_checkin';
+    }
+
+    if (requestedStatus === AttendanceStatus.CHECKED_OUT) {
+      return 'manual_checkout';
+    }
+
+    return 'manual_update';
+  }
+
+  private buildManualAttendanceResponse(
+    attendance: {
+      id: string;
+      sessionId: string;
+      userId: string;
+      status: AttendanceStatus;
+      checkInTime: Date | null;
+      checkOutTime: Date | null;
+      source: string | null;
+      remarks: string | null;
+    },
+    sessionEndTime: Date,
+  ) {
+    const overtime = this.getOvertimeFromSession(
+      sessionEndTime,
+      attendance.checkOutTime,
+    );
+
+    return {
+      id: attendance.id,
+      sessionId: attendance.sessionId,
+      userId: attendance.userId,
+      status: attendance.status,
+      checkInTime: attendance.checkInTime,
+      checkOutTime: attendance.checkOutTime,
+      source: attendance.source,
+      remarks: attendance.remarks,
+      ...(overtime
+        ? {
+            overtimeMinutes: overtime.overtimeMinutes,
+            overtimeHours: overtime.overtimeHours,
+          }
+        : {}),
+    };
   }
 
   async markAttendance(
@@ -450,6 +543,7 @@ export class AttendanceService {
   /**
    * Manual attendance marking by REPs
    * Allows reps to mark attendance for students and lecturers manually
+   * Supports custom start/end times for manual work hour recording
    */
   async markManualAttendance(
     sessionId: string,
@@ -457,6 +551,8 @@ export class AttendanceService {
     status: AttendanceStatus,
     remarks: string | undefined,
     repEmail: string,
+    customStartTime?: Date,
+    customEndTime?: Date,
   ) {
     const rep = await this.helper.getUser(repEmail);
 
@@ -494,12 +590,6 @@ export class AttendanceService {
       );
     }
 
-    if (session.status !== SessionStatus.OPEN) {
-      throw new ForbiddenException(
-        'Session is closed for attendance. You can only mark manual attendance for open sessions',
-      );
-    }
-
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: {
@@ -533,10 +623,20 @@ export class AttendanceService {
       }
     }
 
-    // Lecturer validation: check if assigned to subtopic
-    if (user.lecturer && session.subtopic) {
-      if (session.subtopic.lecturerId !== user.id) {
-        throw new ForbiddenException('Lecturer not assigned to this subtopic');
+    // Lecturer validation: verify session/subtopic assignment unless admin override is used
+    const isAdminOverride = rep.role === 'ADMIN' || rep.role === 'SYSTEM_ADMIN';
+    const assignedLecturerId =
+      session.subtopic?.lecturerId ?? session.lecturerId;
+
+    if (user.lecturer && !isAdminOverride) {
+      if (!assignedLecturerId) {
+        throw new ForbiddenException('No lecturer is assigned to this session');
+      }
+
+      if (assignedLecturerId !== user.id) {
+        throw new ForbiddenException(
+          'Lecturer not assigned to this subtopic/session',
+        );
       }
     }
 
@@ -546,21 +646,47 @@ export class AttendanceService {
     }
 
     const nowUtc = new Date(new Date().toISOString());
+    const existing = await this.prisma.attendance.findUnique({
+      where: {
+        sessionId_userId: {
+          sessionId: session.id,
+          userId: user.id,
+        },
+      },
+    });
 
-    // Determine checkIn/checkOut times based on status
-    let checkInTime: Date | null = null;
-    let checkOutTime: Date | null = null;
+    let checkInTime: Date | null = existing?.checkInTime ?? null;
+    let checkOutTime: Date | null = existing?.checkOutTime ?? null;
+    const hasManualTimeEdit = Boolean(customStartTime || customEndTime);
 
-    if (
-      status === AttendanceStatus.PRESENT ||
-      status === AttendanceStatus.CHECKED_IN ||
-      status === AttendanceStatus.LATE
-    ) {
-      checkInTime = session.startTime;
-      if (status === AttendanceStatus.PRESENT) {
-        checkOutTime = session.endTime || nowUtc;
+    if (status === AttendanceStatus.CHECKED_IN) {
+      checkInTime = customStartTime ?? checkInTime ?? nowUtc;
+    } else if (status === AttendanceStatus.CHECKED_OUT) {
+      checkOutTime = customEndTime ?? checkOutTime ?? nowUtc;
+    } else if (status === AttendanceStatus.PRESENT) {
+      checkInTime = customStartTime ?? checkInTime ?? nowUtc;
+      checkOutTime = customEndTime ?? checkOutTime ?? nowUtc;
+    } else {
+      if (customStartTime) {
+        checkInTime = customStartTime;
+      }
+      if (customEndTime) {
+        checkOutTime = customEndTime;
       }
     }
+
+    if (checkInTime && checkOutTime && checkOutTime < checkInTime) {
+      throw new BadRequestException(
+        'checkOutTime cannot be before checkInTime',
+      );
+    }
+
+    const finalStatus = this.resolveManualStatus(
+      status,
+      checkInTime,
+      checkOutTime,
+      isAdminOverride,
+    );
 
     const attendance = await this.prisma.attendance.upsert({
       where: {
@@ -570,7 +696,7 @@ export class AttendanceService {
         },
       },
       update: {
-        status,
+        status: finalStatus,
         checkInTime,
         checkOutTime,
         remarks,
@@ -579,7 +705,7 @@ export class AttendanceService {
       create: {
         sessionId: session.id,
         userId: user.id,
-        status,
+        status: finalStatus,
         checkInTime,
         checkOutTime,
         remarks,
@@ -587,18 +713,24 @@ export class AttendanceService {
       },
     });
 
+    const actionType = this.getManualActionType(status, hasManualTimeEdit);
+    const attendanceResponse = this.buildManualAttendanceResponse(
+      attendance,
+      session.endTime,
+    );
+
     await this.helper.createUserLog(
       user.email || user.id,
-      `Your attendance was manually marked as ${status} for session ${session.id} by rep ${rep.email}`,
+      `action=${actionType}; actorUserId=${rep.id}; status=${attendance.status}; sessionId=${session.id}`,
       Priority.MEDIUM,
     );
 
     await this.helper.createSystemLog(
-      `Rep ${rep.email} manually marked attendance for user ${user.email || user.id} as ${status} for session ${session.id}`,
+      `action=${actionType}; actorUserId=${rep.id}; targetUserId=${user.id}; status=${attendance.status}; sessionId=${session.id}; checkInTime=${attendance.checkInTime?.toISOString() ?? 'null'}; checkOutTime=${attendance.checkOutTime?.toISOString() ?? 'null'}`,
       Priority.MEDIUM,
     );
 
-    return attendance;
+    return attendanceResponse;
   }
 
   /**
@@ -611,6 +743,8 @@ export class AttendanceService {
       userId: string;
       status: AttendanceStatus;
       remarks?: string;
+      startTime?: string;
+      endTime?: string;
     }[],
     repEmail: string,
   ) {
@@ -627,12 +761,21 @@ export class AttendanceService {
 
     for (const record of attendanceRecords) {
       try {
+        const customStartTime = record.startTime
+          ? new Date(record.startTime)
+          : undefined;
+        const customEndTime = record.endTime
+          ? new Date(record.endTime)
+          : undefined;
+
         const attendance = await this.markManualAttendance(
           sessionId,
           record.userId,
           record.status,
           record.remarks,
           repEmail,
+          customStartTime,
+          customEndTime,
         );
         results.push({ userId: record.userId, success: true, attendance });
       } catch (error) {
@@ -643,6 +786,12 @@ export class AttendanceService {
         });
       }
     }
+
+    const actor = await this.helper.getUser(repEmail);
+    await this.helper.createSystemLog(
+      `action=bulk_manual_update; actorUserId=${actor.id}; sessionId=${sessionId}; processed=${attendanceRecords.length}; success=${results.length}; errors=${errors.length}`,
+      Priority.MEDIUM,
+    );
 
     return { results, errors, totalProcessed: attendanceRecords.length };
   }
