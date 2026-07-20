@@ -214,7 +214,7 @@ export class SessionsService {
       // Geofencing fields (optional)
       latitude: payload.latitude,
       longitude: payload.longitude,
-      geofenceRadius: payload.geofenceRadius ?? 10,
+      geofenceRadius: payload.geofenceRadius ?? 100,
       week: payload.week,
     };
 

@@ -17,7 +17,8 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "import:lecturers:docx": "ts-node src/scripts/import-lecturers-from-docx.ts"
   },
   "dependencies": {
     "@nestjs-modules/mailer": "^2.0.2",
@@ -38,6 +39,7 @@
     "@prisma/client": "^7.2.0",
     "@supabase/supabase-js": "^2.90.1",
     "@types/bcrypt": "^6.0.0",
+    "adm-zip": "^0.5.17",
     "axios": "^1.13.2",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.66.4",
@@ -45,6 +47,7 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.3",
     "dotenv": "^17.2.3",
+    "fast-xml-parser": "^5.8.0",
     "nodemailer": "^7.0.12",
     "passport-jwt": "^4.0.1",
     "reflect-metadata": "^0.2.2",

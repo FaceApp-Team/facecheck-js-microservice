@@ -314,7 +314,7 @@ export class AttendanceService {
         userLatitude,
         userLongitude,
       );
-      withinGeofence = distanceFromSession <= (session.geofenceRadius ?? 10);
+      withinGeofence = distanceFromSession <= (session.geofenceRadius ?? 100);
     }
 
     if (session.mode === SessionMode.CHECK_IN) {
